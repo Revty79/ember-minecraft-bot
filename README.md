@@ -1,0 +1,114 @@
+# ember-minecraft-bot
+
+Basic Minecraft Java bot service for EMBER, built with Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
+
+This is **v0.1 bot body only**:
+- No Ollama integration
+- No EMBER web app integration
+- No advanced AI behavior
+- No mining/building/combat/inventory automation
+
+## Features (v0.1)
+
+1. Connects to your Minecraft Java/Paper server.
+2. Logs connect/disconnect/kick/error events.
+3. On spawn, says: `EMBER is online.`
+4. If any player says `Ember hello`, replies: `Hello. I'm here.`
+5. If any player says `Ember status`, replies with position + health.
+6. If `BIRevty` says `Ember follow me`, bot follows `BIRevty`.
+7. If `BIRevty` says `Ember stop`, bot stops following.
+8. Movement commands are owner-gated to `BIRevty`.
+9. Follow behavior is safety-limited (no digging, no parkour, no sprinting, no 1x1 tower pillaring).
+
+## Requirements
+
+- Node.js 22+
+- A Minecraft Java account for the bot (Microsoft auth)
+- Bot account added to your server whitelist
+
+## Environment
+
+Copy `.env.example` to `.env` and fill values:
+
+```env
+MINECRAFT_HOST=10.0.0.218
+MINECRAFT_PORT=25565
+MINECRAFT_USERNAME=
+MINECRAFT_AUTH=microsoft
+```
+
+Notes:
+- `MINECRAFT_USERNAME` is required. For Microsoft auth, use the bot account identifier you want to cache under.
+- This service currently supports only `MINECRAFT_AUTH=microsoft`.
+
+## Local Development
+
+```bash
+npm install
+cp .env.example .env
+# edit .env
+npm run dev
+```
+
+Production build/run:
+
+```bash
+npm run build
+npm run start
+```
+
+## First-Time Microsoft Login (Device Code Flow)
+
+On first run, Mineflayer will request Microsoft device auth. The service logs an auth message with:
+- verification URL (usually `https://www.microsoft.com/link`)
+- device code
+
+Complete the flow in a browser while the bot process is running. After success, tokens are cached under `./data` (inside container: `/app/data`) so you do not re-auth on every restart.
+
+## Docker
+
+### Build and run with Compose
+
+```bash
+mkdir -p data
+cp .env.example .env
+# edit .env
+docker compose up -d --build
+```
+
+Logs:
+
+```bash
+docker compose logs -f ember-minecraft-bot
+```
+
+Stop:
+
+```bash
+docker compose down
+```
+
+## Home Server Deployment Path
+
+For your home server target path:
+
+```bash
+cd /apps/ember-minecraft-bot
+docker compose up -d --build
+```
+
+`docker-compose.yml` already mounts auth/session cache as requested:
+
+```yaml
+./data:/app/data
+```
+
+Restart policy is set to:
+
+```yaml
+restart: unless-stopped
+```
+
+## Safety Scope
+
+This bot intentionally does **not** mine, attack, place blocks, open containers, or manage inventory in v0.1.
