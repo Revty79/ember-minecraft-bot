@@ -37,7 +37,7 @@ export interface EntitySummary {
   id: number;
   type: string;
   name: string;
-  mobType: string | null;
+  displayName: string | null;
   distance: number;
   position: Vec3Snapshot | null;
 }
@@ -92,6 +92,16 @@ export interface CapabilitySummary {
   ai: boolean;
 }
 
+export interface HomeRecord {
+  x: number;
+  y: number;
+  z: number;
+  dimension: string | null;
+  world: string | null;
+  timestamp: string;
+  setBy: string;
+}
+
 export interface PerceptionSnapshot {
   timestamp: string;
   nearbyPlayers: PlayerSummary[];
@@ -140,6 +150,7 @@ export interface BotState {
   onGround: boolean | null;
   position: Vec3Snapshot | null;
   homePosition: Vec3Snapshot | null;
+  homeRecord: HomeRecord | null;
   dimension: string | null;
   world: string | null;
   nearestPlayers: PlayerSummary[];
@@ -201,6 +212,7 @@ export type BotAction =
   | { type: "LOOK_AT_OWNER" }
   | { type: "SET_HOME" }
   | { type: "GO_HOME" }
+  | { type: "CLEAR_HOME" }
   | { type: "RECOVER" }
   | { type: "REPORT_STATE" }
   | { type: "REPORT_OBSTACLE" }
@@ -217,6 +229,7 @@ export type BotAction =
   | { type: "REPORT_VITALS" }
   | { type: "REPORT_DANGER" }
   | { type: "REPORT_MOVEMENT" }
+  | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
   | { type: "MINE_BLOCK"; blockName?: string }
   | { type: "ATTACK_ENTITY"; entityName?: string }
@@ -279,6 +292,7 @@ export interface StateStore {
   }) => void;
   setPosition: (position: Vec3Snapshot | null) => void;
   setHomePosition: (position: Vec3Snapshot | null) => void;
+  setHomeRecord: (record: HomeRecord | null) => void;
   setWorldInfo: (dimension: string | null, world: string | null) => void;
   setNearestPlayers: (players: PlayerSummary[]) => void;
   setDangerSummary: (danger: DangerSummary) => void;
@@ -309,7 +323,11 @@ export interface StateStore {
 export interface ChatController {
   setChatReady: (ready: boolean) => void;
   isChatReady: () => boolean;
-  send: (message: string, reason: string, options?: { bypassRateLimit?: boolean }) => boolean;
+  send: (
+    message: string,
+    reason: string,
+    options?: { bypassRateLimit?: boolean; bypassNotReadyCooldown?: boolean }
+  ) => boolean;
 }
 
 export interface SafetyDecision {
@@ -332,6 +350,7 @@ export interface MovementController {
   startComeToOwner: (requestor: string, radiusOverride?: number) => boolean;
   startFollowOwner: (requestor: string, distanceOverride?: number) => boolean;
   setHome: (requestor: string) => boolean;
+  clearHome: (requestor: string) => boolean;
   goHome: (requestor: string) => boolean;
   stop: (reason: string) => void;
   stopForDanger: (reason: string) => void;
@@ -346,6 +365,7 @@ export interface MovementController {
   getCurrentGoalDescription: () => string;
   getMode: () => MovementMode;
   isMoving: () => boolean;
+  isEntityPositionHealthy: () => boolean;
 }
 
 export interface PerceptionController {

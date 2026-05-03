@@ -95,6 +95,7 @@ function asBotAction(value: unknown): BotAction | null {
     case "LOOK_AT_OWNER":
     case "SET_HOME":
     case "GO_HOME":
+    case "CLEAR_HOME":
     case "RECOVER":
     case "REPORT_STATE":
     case "REPORT_OBSTACLE":
@@ -111,6 +112,7 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_VITALS":
     case "REPORT_DANGER":
     case "REPORT_MOVEMENT":
+    case "REPORT_HOME_STATUS":
     case "REPORT_SAFETY_TEST": {
       return {
         type: action.type

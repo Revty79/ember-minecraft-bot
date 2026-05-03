@@ -6,6 +6,7 @@ import type {
   BotState,
   CapabilitySummary,
   DangerSummary,
+  HomeRecord,
   MovementMode,
   PlayerSummary,
   StateStore,
@@ -57,6 +58,7 @@ function createInitialState(config: AppConfig): BotState {
     onGround: null,
     position: null,
     homePosition: null,
+    homeRecord: null,
     dimension: null,
     world: null,
     nearestPlayers: [],
@@ -164,6 +166,10 @@ export function createStateStore(config: AppConfig): StateStore {
     state.homePosition = position;
   }
 
+  function setHomeRecord(record: HomeRecord | null): void {
+    state.homeRecord = record ? { ...record } : null;
+  }
+
   function setWorldInfo(dimension: string | null, world: string | null): void {
     state.dimension = dimension;
     state.world = world;
@@ -261,6 +267,7 @@ export function createStateStore(config: AppConfig): StateStore {
       nearestPlayers: state.nearestPlayers.map((player) => ({ ...player })),
       position: state.position ? { ...state.position } : null,
       homePosition: state.homePosition ? { ...state.homePosition } : null,
+      homeRecord: state.homeRecord ? { ...state.homeRecord } : null,
       dangerSummary: { ...state.dangerSummary },
       capabilities: { ...state.capabilities },
       movement: { ...state.movement },
@@ -283,6 +290,7 @@ export function createStateStore(config: AppConfig): StateStore {
     setVitalsDetails,
     setPosition,
     setHomePosition,
+    setHomeRecord,
     setWorldInfo,
     setNearestPlayers,
     setDangerSummary,

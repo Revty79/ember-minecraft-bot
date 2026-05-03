@@ -268,6 +268,7 @@ export function createActionController(
       case "RECOVER": {
         logger.log("survival", "Recovery requested.");
         clearMovementActions("recover");
+        clearActionQueue("recover");
         movement.stop("recover");
 
         const snapshot = state.getBotSnapshot();
@@ -278,6 +279,19 @@ export function createActionController(
             return false;
           }
           chat.send("Recover: respawn requested.", "recover-respawn");
+          return true;
+        }
+
+        if (!movement.isEntityPositionHealthy()) {
+          chat.send("Recovering my position.", "recover-invalid-position", {
+            bypassRateLimit: true,
+            bypassNotReadyCooldown: true
+          });
+          state.setReady(false);
+          logger.warn("life", "Recover requested with invalid live position. Quitting for clean restart.");
+          setTimeout(() => {
+            bot.quit("Invalid position recovery");
+          }, 300).unref();
           return true;
         }
 
@@ -371,7 +385,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, danger, where are you, nearby, look, movement. Owner: come, follow me, stop, respawn, distance, obstacle, set home, home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, danger, where are you, nearby, look, movement. Owner: come, follow me, stop, respawn, distance, obstacle, set home, home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -502,6 +516,24 @@ export function createActionController(
           "movement"
         );
         return true;
+      }
+
+      case "REPORT_HOME_STATUS": {
+        const home = state.state.homeRecord;
+        if (!home) {
+          chat.send("Home: not set.", "home-status-empty");
+          return true;
+        }
+
+        chat.send(
+          `Home: (${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)}) dim=${home.dimension ?? "unknown"} setBy=${home.setBy}.`,
+          "home-status"
+        );
+        return true;
+      }
+
+      case "CLEAR_HOME": {
+        return movement.clearHome(item.requestedBy);
       }
 
       case "REPORT_SAFETY_TEST": {

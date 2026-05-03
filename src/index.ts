@@ -1,6 +1,7 @@
 ﻿import dotenv from "dotenv";
 import { loadConfig } from "./config";
 import { createMineflayerBot } from "./bot/createBot";
+import { loadHomeRecord } from "./bot/homeStore";
 import { createLogger } from "./bot/logging";
 import { createStateStore } from "./bot/state";
 import { createSafetyLayer } from "./bot/safety";
@@ -49,9 +50,27 @@ logger.log(
     config.stopOnDanger
   )}`
 );
+logger.log(
+  "config",
+  `stability notReadyChatCooldownMs=${config.notReadyChatCooldownMs} invalidPositionRecoveryMs=${config.invalidPositionRecoveryMs} stateLogOnlyOnChange=${String(
+    config.stateLogOnlyOnChange
+  )} homeFilePath=${config.homeFilePath}`
+);
 
 const bot = createMineflayerBot(config, logger);
 const state = createStateStore(config);
+
+const persistedHome = loadHomeRecord(config.homeFilePath, logger);
+if (persistedHome) {
+  state.setHomeRecord(persistedHome);
+  state.setHomePosition({
+    x: persistedHome.x,
+    y: persistedHome.y,
+    z: persistedHome.z
+  });
+  logger.log("state", `Loaded persisted home from ${config.homeFilePath}`);
+}
+
 const safety = createSafetyLayer(config, state, logger);
 const chat = createChatController(bot, config, state, logger);
 const perception = createPerceptionController(bot, state, logger);
@@ -137,12 +156,46 @@ const dangerInterval = setInterval(() => {
 }, config.dangerScanIntervalMs);
 dangerInterval.unref();
 
+const HEARTBEAT_EVERY_UNCHANGED = 6;
+let unchangedCount = 0;
+let lastSummaryFingerprint = "";
+
 const stateLogInterval = setInterval(() => {
   const snapshot = state.getBotSnapshot();
-  logger.log(
-    "state",
-    `summary ready=${snapshot.ready} alive=${snapshot.alive} mode=${snapshot.movement.mode} queue=${snapshot.actionQueueLength} players=${snapshot.nearestPlayers.length} danger=${snapshot.dangerSummary.proximity}`
-  );
+  const fingerprint = JSON.stringify({
+    ready: snapshot.ready,
+    alive: snapshot.alive,
+    mode: snapshot.movement.mode,
+    stuck: snapshot.movement.stuckCount,
+    queue: snapshot.actionQueueLength,
+    running: snapshot.runningAction,
+    pos: snapshot.position,
+    danger: snapshot.dangerSummary.proximity,
+    blocked: snapshot.blockedReason,
+    error: snapshot.lastError
+  });
+
+  const summary =
+    `summary ready=${snapshot.ready} alive=${snapshot.alive} mode=${snapshot.movement.mode} queue=${snapshot.actionQueueLength} ` +
+    `players=${snapshot.nearestPlayers.length} danger=${snapshot.dangerSummary.proximity}`;
+
+  if (!config.stateLogOnlyOnChange) {
+    logger.log("state", summary);
+    return;
+  }
+
+  if (fingerprint !== lastSummaryFingerprint) {
+    lastSummaryFingerprint = fingerprint;
+    unchangedCount = 0;
+    logger.log("state", summary);
+    return;
+  }
+
+  unchangedCount += 1;
+  if (unchangedCount >= HEARTBEAT_EVERY_UNCHANGED) {
+    unchangedCount = 0;
+    logger.log("state", `${summary} (unchanged)`);
+  }
 }, config.stateLogIntervalMs);
 stateLogInterval.unref();
 

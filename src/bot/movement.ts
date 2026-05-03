@@ -2,8 +2,11 @@
 import { Movements, goals } from "mineflayer-pathfinder";
 import type { Vec3 } from "vec3";
 import type { AppConfig } from "../config";
+import { clearHomeRecord, saveHomeRecord } from "./homeStore";
+import { isEntityPositionHealthy, isPositionValid } from "./position";
 import type {
   ChatController,
+  HomeRecord,
   Logger,
   MovementController,
   MovementMode,
@@ -29,8 +32,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isFinitePosition(position: Vec3 | null | undefined): boolean {
-  if (!position) return false;
-  return Number.isFinite(position.x) && Number.isFinite(position.y) && Number.isFinite(position.z);
+  return isPositionValid(position as unknown as { x: unknown; y: unknown; z: unknown } | null | undefined);
 }
 
 function formatPosition(position: Vec3): string {
@@ -160,11 +162,10 @@ export function createMovementController(
       return { ready: false, reason: "bot position not valid yet after respawn/death." };
     }
 
-    const position = bot.entity?.position;
-    if (!isFinitePosition(position)) {
+    if (!isEntityPositionHealthy(bot)) {
       return {
         ready: false,
-        reason: `bot position not valid yet after respawn/death. raw=${JSON.stringify(position)}`
+        reason: `bot position not valid yet after respawn/death. raw=${JSON.stringify(bot.entity?.position)}`
       };
     }
 
@@ -341,6 +342,9 @@ export function createMovementController(
     }
 
     const obstacle = perception.getImmediateObstacles();
+    if (obstacle.frontPassable === false && obstacle.stepUpPossible === true) {
+      logger.warn("move", "step-up blocked: front blocked and step-up looked possible.");
+    }
     logger.warn("perception", "Obstacle report on stuck stop.", obstacle);
     state.addEvent("obstacle_detected", "Obstacle report captured on stuck limit", obstacle);
 
@@ -476,10 +480,49 @@ export function createMovementController(
     }
 
     const home = toSnapshot(bot.entity.position);
+    const record: HomeRecord = {
+      x: home.x,
+      y: home.y,
+      z: home.z,
+      dimension: state.state.dimension,
+      world: state.state.world,
+      timestamp: nowIso(),
+      setBy: requestor
+    };
+
+    const persisted = saveHomeRecord(config.homeFilePath, record, logger);
+    if (!persisted) {
+      chat.send("Failed to persist home.", "set-home-save-failed");
+      return false;
+    }
+
     state.setHomePosition(home);
+    state.setHomeRecord(record);
     logger.log("move", `home set at (${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)})`);
-    state.addEvent("state_update", "Home position set", home);
+    state.addEvent("state_update", "Home position set", record);
     chat.send("Home set.", "set-home");
+    return true;
+  }
+
+  function clearHome(requestor: string): boolean {
+    if (!safety.isOwner(requestor)) {
+      chat.send(`Only ${config.ownerUsername} can issue movement commands.`, "clear-home-denied");
+      return false;
+    }
+
+    const cleared = clearHomeRecord(config.homeFilePath, logger);
+    if (!cleared) {
+      chat.send("Failed to clear home.", "clear-home-failed");
+      return false;
+    }
+
+    state.setHomePosition(null);
+    state.setHomeRecord(null);
+    state.addEvent("state_update", "Home cleared", {
+      clearedBy: requestor
+    });
+    logger.log("move", "home cleared");
+    chat.send("Home cleared.", "clear-home");
     return true;
   }
 
@@ -489,7 +532,11 @@ export function createMovementController(
       return false;
     }
 
-    const home = state.state.homePosition;
+    const record = state.state.homeRecord;
+    const home = record
+      ? { x: record.x, y: record.y, z: record.z }
+      : state.state.homePosition;
+
     if (!home) {
       chat.send("Home is not set yet.", "home-not-set");
       return false;
@@ -503,7 +550,11 @@ export function createMovementController(
     }
 
     const danger = state.state.dangerSummary;
-    if (config.stopOnDanger && danger.nearestHostileDistance !== null && danger.nearestHostileDistance <= config.hostileStopRadius) {
+    if (
+      config.stopOnDanger &&
+      danger.nearestHostileDistance !== null &&
+      danger.nearestHostileDistance <= config.hostileStopRadius
+    ) {
       chat.send("Danger is too close. I will not path home right now.", "home-danger-blocked");
       return false;
     }
@@ -553,6 +604,10 @@ export function createMovementController(
     }
 
     if (isBotAlive(bot)) {
+      if (!isEntityPositionHealthy(bot)) {
+        chat.send("I am alive but my position is invalid. Use Ember recover.", "respawn-invalid-alive");
+        return false;
+      }
       chat.send("I am already alive.", "respawn-alive");
       return false;
     }
@@ -715,6 +770,7 @@ export function createMovementController(
     startComeToOwner,
     startFollowOwner,
     setHome,
+    clearHome,
     goHome,
     stop,
     stopForDanger,
@@ -728,6 +784,7 @@ export function createMovementController(
     getDistanceToOwner,
     getCurrentGoalDescription,
     getMode,
-    isMoving
+    isMoving,
+    isEntityPositionHealthy: () => isEntityPositionHealthy(bot)
   };
 }

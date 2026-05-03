@@ -18,6 +18,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "LOOK_AT_OWNER",
     "SET_HOME",
     "GO_HOME",
+    "CLEAR_HOME",
     "RECOVER",
     "REPORT_STATE",
     "REPORT_OBSTACLE",
@@ -25,6 +26,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_DEBUG",
     "REPORT_AI_STATUS",
     "REPORT_ACTION_QUEUE",
+    "REPORT_HOME_STATUS",
     "REPORT_SAFETY_TEST"
   ]);
 

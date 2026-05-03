@@ -36,6 +36,10 @@ export interface AppConfig {
   followRepathIntervalMs: number;
   movementProgressCheckMs: number;
   minProgressDistance: number;
+  notReadyChatCooldownMs: number;
+  invalidPositionRecoveryMs: number;
+  stateLogOnlyOnChange: boolean;
+  homeFilePath: string;
 
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
@@ -134,6 +138,10 @@ export function loadConfig(): AppConfig {
   const followRepathIntervalMs = readInteger("FOLLOW_REPATH_INTERVAL_MS", 1500, 100);
   const movementProgressCheckMs = readInteger("MOVEMENT_PROGRESS_CHECK_MS", 2000, 250);
   const minProgressDistance = readNumber("MIN_PROGRESS_DISTANCE", 0.5, 0.01);
+  const notReadyChatCooldownMs = readInteger("NOT_READY_CHAT_COOLDOWN_MS", 10000, 0);
+  const invalidPositionRecoveryMs = readInteger("INVALID_POSITION_RECOVERY_MS", 5000, 1000);
+  const stateLogOnlyOnChange = readBoolean("STATE_LOG_ONLY_ON_CHANGE", true);
+  const homeFilePath = path.resolve(process.cwd(), readEnv("HOME_FILE_PATH", "./data/home.json"));
 
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
@@ -186,6 +194,10 @@ export function loadConfig(): AppConfig {
     followRepathIntervalMs,
     movementProgressCheckMs,
     minProgressDistance,
+    notReadyChatCooldownMs,
+    invalidPositionRecoveryMs,
+    stateLogOnlyOnChange,
+    homeFilePath,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

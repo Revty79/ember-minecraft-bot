@@ -114,6 +114,16 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember home status") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_HOME_STATUS" }, "home-status");
+      return;
+    }
+
+    if (normalized === "ember clear home") {
+      queueOwnerOnlyCommand(username, { type: "CLEAR_HOME" }, "clear-home");
+      return;
+    }
+
     if (normalized === "ember home") {
       queueOwnerOnlyCommand(username, { type: "GO_HOME" }, "home");
       return;

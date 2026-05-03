@@ -1,6 +1,7 @@
 ﻿import type { Bot } from "mineflayer";
 import type { PartiallyComputedPath } from "mineflayer-pathfinder";
 import type { AppConfig } from "../config";
+import { isEntityPositionHealthy } from "./position";
 import type {
   ActionController,
   ChatController,
@@ -18,11 +19,6 @@ function sleep(ms: number): Promise<void> {
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function isFinitePosition(position: { x: number; y: number; z: number } | null | undefined): boolean {
-  if (!position) return false;
-  return Number.isFinite(position.x) && Number.isFinite(position.y) && Number.isFinite(position.z);
 }
 
 function isBotAlive(bot: Bot): boolean {
@@ -47,6 +43,10 @@ export function createLifecycleController(
   let announcedOnline = false;
   let announcePendingAfterLogin = false;
   let kickedForChatValidation = false;
+  let invalidRecoveryQuitRequested = false;
+  let invalidRecoveryInProgress = false;
+  let invalidLivePositionSince: number | null = null;
+  let lastInvalidPositionLogAt = 0;
   let lastPathUpdateLogAt = 0;
   let lastPathUpdateStatus = "";
 
@@ -84,6 +84,40 @@ export function createLifecycleController(
     }
   }
 
+  async function triggerInvalidLivePositionRecovery(trigger: string): Promise<void> {
+    if (invalidRecoveryInProgress) {
+      return;
+    }
+
+    invalidRecoveryInProgress = true;
+    state.setReady(false);
+
+    logger.error("life", `invalid live position detected (${trigger})`, {
+      rawPosition: bot.entity?.position
+    });
+    state.addEvent("state_update", "Invalid live position detected", {
+      trigger,
+      rawPosition: bot.entity?.position
+    });
+
+    actions.clearActionQueue("invalid-live-position");
+    movement.stop("invalid-live-position");
+
+    const recovered = await movement.waitForValidPosition(config.invalidPositionRecoveryMs);
+    if (recovered && movement.isEntityPositionHealthy()) {
+      invalidLivePositionSince = null;
+      invalidRecoveryInProgress = false;
+      state.setReady(true);
+      logger.log("life", "Invalid live position recovered without restart.");
+      state.addEvent("state_update", "Invalid live position recovered.");
+      return;
+    }
+
+    logger.error("life", "Invalid position recovery failed; quitting for Docker restart.");
+    invalidRecoveryQuitRequested = true;
+    bot.quit("Invalid position recovery");
+  }
+
   function bind(): void {
     bot.on("login", () => {
       state.setConnected(true);
@@ -91,6 +125,9 @@ export function createLifecycleController(
       state.setSpawned(false);
       state.setReady(false);
       announcePendingAfterLogin = true;
+      invalidRecoveryQuitRequested = false;
+      invalidRecoveryInProgress = false;
+      invalidLivePositionSince = null;
 
       logger.log("connect", `Logged in as ${bot.username} -> ${config.minecraftHost}:${config.minecraftPort}`);
       state.addEvent("login", "Bot logged in", {
@@ -113,6 +150,8 @@ export function createLifecycleController(
       state.setSpawned(true);
       state.setAlive(true);
       diedSinceLastSpawn = false;
+      invalidRecoveryInProgress = false;
+      invalidLivePositionSince = null;
 
       logger.log("connect", `Bot spawned in world (${spawnLabel}).`);
       state.addEvent("spawn", `Spawn event: ${spawnLabel}`);
@@ -133,6 +172,7 @@ export function createLifecycleController(
       diedSinceLastSpawn = true;
       state.setAlive(false);
       state.setLastDeathTimestamp(nowIso());
+      state.setReady(false);
       chat.setChatReady(false);
 
       logger.log("life", "Bot died.");
@@ -207,6 +247,7 @@ export function createLifecycleController(
         isInLava?: boolean;
         isOnFire?: boolean;
       };
+
       const food = Number.isFinite(runtime.food) ? Number(runtime.food) : null;
       const saturationRaw =
         Number.isFinite(runtime.foodSaturation) ? Number(runtime.foodSaturation) :
@@ -225,13 +266,40 @@ export function createLifecycleController(
       });
       state.setAlive(isBotAlive(bot));
 
-      const position = bot.entity?.position;
-      if (isFinitePosition(position)) {
+      const healthyPosition = isEntityPositionHealthy(bot);
+      if (healthyPosition) {
         state.setPosition({
-          x: position.x,
-          y: position.y,
-          z: position.z
+          x: bot.entity.position.x,
+          y: bot.entity.position.y,
+          z: bot.entity.position.z
         });
+        invalidLivePositionSince = null;
+      } else {
+        state.setPosition(null);
+      }
+
+      if (state.state.alive && !healthyPosition) {
+        const now = Date.now();
+        if (invalidLivePositionSince === null) {
+          invalidLivePositionSince = now;
+        }
+
+        state.setReady(false);
+
+        if (now - lastInvalidPositionLogAt >= config.notReadyChatCooldownMs) {
+          logger.warn("life", "alive bot has invalid position", {
+            rawPosition: bot.entity?.position
+          });
+          lastInvalidPositionLogAt = now;
+        }
+
+        if (
+          !invalidRecoveryInProgress &&
+          invalidLivePositionSince !== null &&
+          now - invalidLivePositionSince >= config.invalidPositionRecoveryMs
+        ) {
+          void triggerInvalidLivePositionRecovery("physicTick");
+        }
       }
 
       state.setWorldInfo(bot.game?.dimension ?? null, bot.game?.levelType ?? null);
@@ -271,10 +339,10 @@ export function createLifecycleController(
         reason
       });
 
-      if (kickedForChatValidation) {
+      if (kickedForChatValidation || invalidRecoveryQuitRequested) {
         logger.error(
           "connect",
-          "Exiting process due to chat validation kick; Docker should restart the service."
+          "Exiting process so Docker can restart cleanly."
         );
         process.exit(1);
       }
@@ -294,3 +362,4 @@ export function createLifecycleController(
     bind
   };
 }
+

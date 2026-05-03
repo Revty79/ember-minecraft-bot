@@ -95,6 +95,23 @@ function isPassableBlock(name: string | null, boundingBox: string | null): boole
   return false;
 }
 
+function normalizeLabel(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : null;
+  }
+
+  if (value && typeof value === "object" && "toString" in value) {
+    try {
+      const text = String(value);
+      return text.trim().length > 0 ? text : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 export function createPerceptionController(bot: Bot, state: StateStore, logger: Logger): PerceptionController {
   let lastPosition: Vec3Snapshot | null = null;
   let lastPositionTimestamp = Date.now();
@@ -146,11 +163,20 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       const distance = computeDistance(botPos, pos);
       if (distance > radius) continue;
 
+      const displayName = normalizeLabel(
+        (entity as unknown as { displayName?: unknown }).displayName
+      );
+      const fallbackName =
+        normalizeLabel(entity.name) ??
+        normalizeLabel((entity as unknown as { username?: unknown }).username) ??
+        normalizeLabel(entity.type) ??
+        "unknown";
+
       entities.push({
         id: entity.id,
         type: entity.type ? String(entity.type) : "unknown",
-        name: entity.name ?? "unknown",
-        mobType: entity.mobType ?? null,
+        name: fallbackName,
+        displayName,
         distance,
         position: pos
       });
@@ -162,10 +188,16 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
   function getNearbyHostileMobs(radius: number): EntitySummary[] {
     return getNearbyEntities(radius).filter((entity) => {
       const name = entity.name.toLowerCase();
-      const mobType = entity.mobType?.toLowerCase() ?? "";
+      const display = entity.displayName?.toLowerCase() ?? "";
+      const type = entity.type.toLowerCase();
+
       if (HOSTILE_MOBS.has(name)) return true;
-      if (HOSTILE_MOBS.has(mobType)) return true;
-      if (mobType === "hostile") return true;
+      if (HOSTILE_MOBS.has(display)) return true;
+      if (HOSTILE_MOBS.has(type)) return true;
+
+      for (const hostileName of HOSTILE_MOBS) {
+        if (display.includes(hostileName)) return true;
+      }
       return false;
     });
   }
