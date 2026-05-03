@@ -2,23 +2,24 @@
 
 Basic Minecraft Java bot service for EMBER, built with Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This is **v0.1 bot body only**:
+This is **v0.2 bot body only**:
 - No Ollama integration
 - No EMBER web app integration
 - No advanced AI behavior
 - No mining/building/combat/inventory automation
 
-## Features (v0.1)
+## Features (v0.2)
 
 1. Connects to your Minecraft Java/Paper server.
 2. Logs connect/disconnect/kick/error events.
 3. On spawn, says: `EMBER is online.`
 4. If any player says `Ember hello`, replies: `Hello. I'm here.`
-5. If any player says `Ember status`, replies with position + health.
+5. If any player says `Ember status`, replies with position + health (and avoids `NaN` output).
 6. If `BIRevty` says `Ember follow me`, bot follows `BIRevty`.
-7. If `BIRevty` says `Ember stop`, bot stops following.
-8. Movement commands are owner-gated to `BIRevty`.
-9. Follow behavior is safety-limited (no digging, no parkour, no sprinting, no 1x1 tower pillaring).
+7. If `BIRevty` says `Ember come`, bot pathfinds to `BIRevty`'s current location.
+8. If `BIRevty` says `Ember stop`, bot stops following.
+9. Movement commands are owner-gated to `BIRevty`.
+10. Follow behavior is safety-limited (no digging, no parkour, no sprinting, no 1x1 tower pillaring).
 
 ## Requirements
 
@@ -35,11 +36,23 @@ MINECRAFT_HOST=10.0.0.218
 MINECRAFT_PORT=25565
 MINECRAFT_USERNAME=
 MINECRAFT_AUTH=microsoft
+MINECRAFT_VERSION=
 ```
 
 Notes:
 - `MINECRAFT_USERNAME` is required. For Microsoft auth, use the bot account identifier you want to cache under.
 - This service currently supports only `MINECRAFT_AUTH=microsoft`.
+- `MINECRAFT_VERSION` is optional. Set it when you want to force a specific server protocol/version (useful for diagnostics).
+
+### Test Server Example
+
+```env
+MINECRAFT_HOST=10.0.0.218
+MINECRAFT_PORT=25566
+MINECRAFT_USERNAME=EmberR2025
+MINECRAFT_AUTH=microsoft
+MINECRAFT_VERSION=1.21.11
+```
 
 ## Local Development
 
@@ -111,4 +124,4 @@ restart: unless-stopped
 
 ## Safety Scope
 
-This bot intentionally does **not** mine, attack, place blocks, open containers, or manage inventory in v0.1.
+This bot intentionally does **not** mine, attack, place blocks, open containers, or manage inventory in v0.2.
