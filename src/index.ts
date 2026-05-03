@@ -15,6 +15,7 @@ const SPAWN_ANNOUNCE_DELAY_MS = 3000;
 const POSITION_WAIT_TIMEOUT_MS = 15000;
 const RESPAWN_DELAY_MS = 1500;
 const RESPAWN_COOLDOWN_MS = 5000;
+const PATH_UPDATE_LOG_INTERVAL_MS = 2500;
 
 function readEnv(name: string, fallback?: string): string {
   const value = process.env[name]?.trim();
@@ -52,6 +53,29 @@ function readBooleanEnv(name: string, fallback: boolean): boolean {
   throw new Error(`Invalid boolean value for ${name}: "${raw}"`);
 }
 
+function readNumberEnv(name: string, fallback: number, min?: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid numeric value for ${name}: "${raw}"`);
+  }
+  if (min !== undefined && value < min) {
+    throw new Error(`Invalid numeric value for ${name}: "${raw}" (must be >= ${min})`);
+  }
+
+  return value;
+}
+
+function readIntEnv(name: string, fallback: number, min?: number): number {
+  const value = readNumberEnv(name, fallback, min);
+  if (!Number.isInteger(value)) {
+    throw new Error(`Invalid integer value for ${name}: "${value}"`);
+  }
+  return value;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -61,12 +85,20 @@ type FollowState = {
   targetUsername: string | null;
 };
 
+type MovementMode = "idle" | "come" | "follow";
+
 const host = readEnv("MINECRAFT_HOST", "10.0.0.218");
 const port = readPort("MINECRAFT_PORT", 25565);
 const username = readEnv("MINECRAFT_USERNAME");
 const auth = readEnv("MINECRAFT_AUTH", "microsoft");
 const version = process.env.MINECRAFT_VERSION?.trim() || undefined;
 const announceOnSpawn = readBooleanEnv("ANNOUNCE_ON_SPAWN", true);
+const maxComeDistance = readNumberEnv("MAX_COME_DISTANCE", 40, 1);
+const maxFollowStartDistance = readNumberEnv("MAX_FOLLOW_START_DISTANCE", 40, 1);
+const comeGoalRadius = readNumberEnv("COME_GOAL_RADIUS", 3, 1);
+const followDistance = readNumberEnv("FOLLOW_DISTANCE", 3, 1);
+const pathfinderTimeoutMs = readIntEnv("PATHFINDER_TIMEOUT_MS", 15000, 1000);
+const stuckResetLimit = readIntEnv("STUCK_RESET_LIMIT", 3, 1);
 
 if (auth !== "microsoft") {
   throw new Error(
@@ -110,6 +142,13 @@ let respawnTimerActive = false;
 let lastRespawnRequestAt = 0;
 let lastChatSentAt = 0;
 let kickedForChatValidation = false;
+let movementMode: MovementMode = "idle";
+let movementStartedAt = 0;
+let stuckResetCount = 0;
+let activeComeGoal: { x: number; y: number; z: number; radius: number } | null = null;
+let movementTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+let lastPathUpdateLogAt = 0;
+let lastPathUpdateStatus = "";
 
 const ownerLower = OWNER_USERNAME.toLowerCase();
 
@@ -117,6 +156,9 @@ if (version) {
   console.log(`[connect] Requested Minecraft protocol version: ${version}`);
 }
 console.log(`[connect] ANNOUNCE_ON_SPAWN=${String(announceOnSpawn)}`);
+console.log(
+  `[move] config MAX_COME_DISTANCE=${maxComeDistance} MAX_FOLLOW_START_DISTANCE=${maxFollowStartDistance} COME_GOAL_RADIUS=${comeGoalRadius} FOLLOW_DISTANCE=${followDistance} PATHFINDER_TIMEOUT_MS=${pathfinderTimeoutMs} STUCK_RESET_LIMIT=${stuckResetLimit}`
+);
 
 function isOwner(usernameToCheck: string): boolean {
   return usernameToCheck.toLowerCase() === ownerLower;
@@ -175,7 +217,24 @@ function getPlayerEntityByUsername(usernameToFind: string) {
   return player?.entity;
 }
 
-function safeChat(message: string, reason: string): boolean {
+function getDistanceToOwner(): { ok: true; distance: number } | { ok: false; reason: string } {
+  const readiness = getBotPositionReadiness();
+  if (!readiness.ready) {
+    return { ok: false, reason: readiness.reason };
+  }
+
+  const ownerEntity = getPlayerEntityByUsername(OWNER_USERNAME);
+  if (!ownerEntity || !isFinitePosition(ownerEntity.position)) {
+    return { ok: false, reason: "owner position unavailable" };
+  }
+
+  return {
+    ok: true,
+    distance: bot.entity.position.distanceTo(ownerEntity.position)
+  };
+}
+
+function safeChat(message: string, reason: string, options?: { bypassRateLimit?: boolean }): boolean {
   if (!chatReady) {
     console.log(`[chat] skipped (${reason}): bot not ready to chat yet.`);
     return false;
@@ -183,7 +242,7 @@ function safeChat(message: string, reason: string): boolean {
 
   const now = Date.now();
   const elapsedMs = now - lastChatSentAt;
-  if (elapsedMs < CHAT_MIN_INTERVAL_MS) {
+  if (!options?.bypassRateLimit && elapsedMs < CHAT_MIN_INTERVAL_MS) {
     console.log(
       `[chat] skipped (${reason}): rate-limited (${elapsedMs}ms < ${CHAT_MIN_INTERVAL_MS}ms).`
     );
@@ -202,15 +261,73 @@ function safeChat(message: string, reason: string): boolean {
 }
 
 function clearMovementState(reason: string): void {
+  const previousMode = movementMode;
+  const elapsedMs = movementStartedAt > 0 ? Date.now() - movementStartedAt : 0;
+  const distanceInfo = getDistanceToOwner();
+  const distanceLabel = distanceInfo.ok ? distanceInfo.distance.toFixed(2) : `unavailable (${distanceInfo.reason})`;
+
+  if (movementTimeoutHandle) {
+    clearTimeout(movementTimeoutHandle);
+    movementTimeoutHandle = null;
+  }
+
   followState.active = false;
   followState.targetUsername = null;
+  movementMode = "idle";
+  movementStartedAt = 0;
+  stuckResetCount = 0;
+  activeComeGoal = null;
   bot.pathfinder.stop();
   bot.pathfinder.setGoal(null);
+  console.log(
+    `[move] stopped mode=${previousMode} reason=${reason} elapsedMs=${elapsedMs} distance=${distanceLabel}`
+  );
   console.log(`[move] Cleared movement state (${reason}).`);
 }
 
 function stopFollowing(reason: string): void {
   clearMovementState(reason);
+}
+
+function startComeTimeout(targetUsername: string): void {
+  if (movementTimeoutHandle) {
+    clearTimeout(movementTimeoutHandle);
+  }
+
+  movementTimeoutHandle = setTimeout(() => {
+    if (movementMode !== "come") return;
+    const distanceInfo = getDistanceToOwner();
+    const distanceLabel = distanceInfo.ok ? distanceInfo.distance.toFixed(2) : `unavailable (${distanceInfo.reason})`;
+    console.log(`[move] timeout: could not reach target in ${pathfinderTimeoutMs}ms. distance=${distanceLabel}`);
+    clearMovementState("come-timeout");
+    safeChat("I couldn't reach you safely.", "come-timeout", { bypassRateLimit: true });
+  }, pathfinderTimeoutMs);
+
+  console.log(`[move] come timeout started (${pathfinderTimeoutMs}ms) target=${targetUsername}`);
+}
+
+function markMovementStart(mode: MovementMode): void {
+  movementMode = mode;
+  movementStartedAt = Date.now();
+  stuckResetCount = 0;
+}
+
+function getCurrentGoalDebugPosition(): string {
+  if (movementMode === "come" && activeComeGoal) {
+    return `comeGoal=(${activeComeGoal.x.toFixed(2)}, ${activeComeGoal.y.toFixed(
+      2
+    )}, ${activeComeGoal.z.toFixed(2)}) r=${activeComeGoal.radius}`;
+  }
+
+  if (movementMode === "follow") {
+    const ownerEntity = getPlayerEntityByUsername(OWNER_USERNAME);
+    if (ownerEntity && isFinitePosition(ownerEntity.position)) {
+      return `followOwner=${formatPosition(ownerEntity.position)} r=${followDistance}`;
+    }
+    return "followOwner=unavailable";
+  }
+
+  return "goal=none";
 }
 
 function scheduleRespawn(reason: string): void {
@@ -301,6 +418,10 @@ async function handleSpawnReadiness(spawnLabel: string): Promise<void> {
 function startFollowingOwner(requestor: string): void {
   console.log(`[move] Follow command received from "${requestor}".`);
 
+  if (movementMode !== "idle") {
+    clearMovementState("switch-to-follow");
+  }
+
   if (!isOwner(requestor)) {
     safeChat("Only BIRevty can issue movement commands.", "follow-denied");
     return;
@@ -324,17 +445,35 @@ function startFollowingOwner(requestor: string): void {
     return;
   }
 
+  const initialDistance = bot.entity.position.distanceTo(ownerEntity.position);
+  console.log(`[move] follow distance=${initialDistance.toFixed(2)}`);
+  if (initialDistance > maxFollowStartDistance) {
+    console.log(
+      `[move] distance blocked: follow start distance=${initialDistance.toFixed(
+        2
+      )} > MAX_FOLLOW_START_DISTANCE=${maxFollowStartDistance}`
+    );
+    safeChat("You are too far away for me to path safely yet.", "follow-too-far");
+    return;
+  }
+
   console.log(`[move] Owner entity position: ${formatPosition(ownerEntity.position)}`);
   console.log(`[move] Bot entity position before follow: ${formatPosition(bot.entity.position)}`);
 
+  markMovementStart("follow");
   followState.active = true;
   followState.targetUsername = OWNER_USERNAME;
-  bot.pathfinder.setGoal(new goals.GoalFollow(ownerEntity, 2), true);
+  bot.pathfinder.setGoal(new goals.GoalFollow(ownerEntity, followDistance), true);
+  console.log(`[move] follow started with FOLLOW_DISTANCE=${followDistance}`);
   safeChat("Following BIRevty.", "follow-started");
 }
 
 function comeToOwner(requestor: string): void {
   console.log(`[move] Come command received from "${requestor}".`);
+
+  if (movementMode !== "idle") {
+    clearMovementState("switch-to-come");
+  }
 
   if (!isOwner(requestor)) {
     safeChat("Only BIRevty can issue movement commands.", "come-denied");
@@ -359,13 +498,27 @@ function comeToOwner(requestor: string): void {
     return;
   }
 
+  const distance = bot.entity.position.distanceTo(ownerEntity.position);
+  console.log(`[move] come distance=${distance.toFixed(2)}`);
+  if (distance > maxComeDistance) {
+    console.log(
+      `[move] distance blocked: come distance=${distance.toFixed(2)} > MAX_COME_DISTANCE=${maxComeDistance}`
+    );
+    safeChat("You are too far away for me to path safely yet.", "come-too-far");
+    return;
+  }
+
   const { x, y, z } = ownerEntity.position;
   console.log(`[move] Owner entity position for come: ${formatPosition(ownerEntity.position)}`);
   console.log(`[move] Bot entity position before come: ${formatPosition(bot.entity.position)}`);
+  console.log(`[move] come goal radius=${comeGoalRadius}`);
 
+  markMovementStart("come");
+  activeComeGoal = { x, y, z, radius: comeGoalRadius };
   followState.active = false;
   followState.targetUsername = null;
-  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1), false);
+  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, comeGoalRadius), false);
+  startComeTimeout(OWNER_USERNAME);
   safeChat("Coming to BIRevty.", "come-started");
 }
 
@@ -400,13 +553,48 @@ function sendStatus(): void {
   safeChat(`Status: pos=(${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}), hp=${hp}`, "status-ok");
 }
 
+function sendWhereAreYou(): void {
+  const dimension = bot.game?.dimension ?? "unknown";
+  const world = bot.game?.levelType ?? "unknown";
+  const hp = Number.isFinite(bot.health) ? bot.health.toFixed(1) : "unknown";
+  const entity = bot.entity;
+
+  if (!entity || !isFinitePosition(entity.position)) {
+    safeChat(`I'm at an unknown position. dim=${dimension}, world=${world}, hp=${hp}`, "where-unavailable");
+    return;
+  }
+
+  safeChat(
+    `I am at (${entity.position.x.toFixed(1)}, ${entity.position.y.toFixed(1)}, ${entity.position.z.toFixed(
+      1
+    )}) in ${dimension} (world=${world}), hp=${hp}.`,
+    "where-ok"
+  );
+}
+
+function sendDistanceToOwner(): void {
+  const distanceInfo = getDistanceToOwner();
+  if (!distanceInfo.ok) {
+    console.log(`[move] distance command unavailable: ${distanceInfo.reason}`);
+    safeChat("Distance unavailable right now.", "distance-unavailable");
+    return;
+  }
+
+  safeChat(`Distance to BIRevty: ${distanceInfo.distance.toFixed(1)} blocks.`, "distance-ok");
+}
+
 bot.once("spawn", () => {
   const movement = new Movements(bot);
   movement.canDig = false;
+  movement.canOpenDoors = false;
   movement.allow1by1towers = false;
   movement.allowParkour = false;
   movement.allowSprinting = false;
+  movement.maxDropDown = 2;
+  movement.infiniteLiquidDropdownDistance = false;
+  movement.allowFreeMotion = true;
   bot.pathfinder.setMovements(movement);
+  console.log("[move] conservative movement profile applied.");
 });
 
 bot.on("login", () => {
@@ -446,17 +634,56 @@ bot.on("death", () => {
 
 bot.on("goal_reached", (goal) => {
   console.log(`[pathfinder] goal_reached: ${goal?.constructor?.name ?? "unknown"}`);
+  const distanceInfo = getDistanceToOwner();
+  if (distanceInfo.ok) {
+    console.log(`[move] current distance=${distanceInfo.distance.toFixed(2)}`);
+  }
+
+  if (movementMode === "come") {
+    clearMovementState("come-goal-reached");
+  }
 });
 
 bot.on("path_update", (result: PartiallyComputedPath) => {
   const status = result?.status ?? "unknown";
   const pathLength = Array.isArray(result?.path) ? result.path.length : 0;
   const timeMs = typeof result?.time === "number" ? result.time.toFixed(0) : "n/a";
-  console.log(`[pathfinder] path_update: status=${status} steps=${pathLength} timeMs=${timeMs}`);
+  const now = Date.now();
+  const shouldLog =
+    status !== lastPathUpdateStatus || now - lastPathUpdateLogAt >= PATH_UPDATE_LOG_INTERVAL_MS;
+
+  if (shouldLog) {
+    lastPathUpdateStatus = status;
+    lastPathUpdateLogAt = now;
+    console.log(`[pathfinder] path_update: status=${status} steps=${pathLength} timeMs=${timeMs}`);
+  }
 });
 
 bot.on("path_reset", (reason) => {
   console.log(`[pathfinder] path_reset: reason=${String(reason)}`);
+
+  if (reason !== "stuck") return;
+  if (movementMode === "idle") return;
+
+  stuckResetCount += 1;
+  const botPos = isFinitePosition(bot.entity?.position) ? formatPosition(bot.entity.position) : "unavailable";
+  const goalPos = getCurrentGoalDebugPosition();
+  const distanceInfo = getDistanceToOwner();
+  const distanceLabel = distanceInfo.ok ? distanceInfo.distance.toFixed(2) : `unavailable (${distanceInfo.reason})`;
+
+  console.log(
+    `[move] stuck reset ${stuckResetCount}/${stuckResetLimit} mode=${movementMode} bot=${botPos} ${goalPos} distance=${distanceLabel}`
+  );
+
+  if (stuckResetCount < stuckResetLimit) {
+    return;
+  }
+
+  console.log(
+    `[move] stuck limit reached. stopping movement. stuckCount=${stuckResetCount} bot=${botPos} ${goalPos}`
+  );
+  clearMovementState("stuck-limit-reached");
+  safeChat("I'm stuck and stopped moving.", "stuck-limit", { bypassRateLimit: true });
 });
 
 bot.on("path_stop", () => {
@@ -516,6 +743,20 @@ bot.on("chat", (chatUsername, message) => {
     return;
   }
 
+  if (normalized === "ember where are you") {
+    sendWhereAreYou();
+    return;
+  }
+
+  if (normalized === "ember distance") {
+    if (!ownerCommand) {
+      safeChat("Only BIRevty can issue movement commands.", "distance-denied");
+      return;
+    }
+    sendDistanceToOwner();
+    return;
+  }
+
   if (normalized === "ember follow me") {
     if (!ownerCommand) {
       safeChat("Only BIRevty can issue movement commands.", "follow-denied");
@@ -570,11 +811,17 @@ bot.on("physicTick", () => {
     return;
   }
 
+  const currentDistance = bot.entity.position.distanceTo(target.position);
+  if (currentDistance <= followDistance + 1) {
+    return;
+  }
+
   const currentGoal = bot.pathfinder.goal;
   const needsGoalRefresh =
     !(currentGoal instanceof goals.GoalFollow) || (currentGoal as { entity?: unknown }).entity !== target;
   if (needsGoalRefresh) {
-    bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
+    console.log(`[move] follow refresh: distance=${currentDistance.toFixed(2)} target moved.`);
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, followDistance), true);
   }
 });
 
