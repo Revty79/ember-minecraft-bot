@@ -1,0 +1,318 @@
+import type { Bot } from "mineflayer";
+
+export type LogPrefix =
+  | "config"
+  | "connect"
+  | "life"
+  | "chat"
+  | "command"
+  | "action"
+  | "safety"
+  | "move"
+  | "pathfinder"
+  | "perception"
+  | "ai"
+  | "state";
+
+export interface Logger {
+  log: (prefix: LogPrefix, message: string, data?: unknown) => void;
+  warn: (prefix: LogPrefix, message: string, data?: unknown) => void;
+  error: (prefix: LogPrefix, message: string, data?: unknown) => void;
+}
+
+export interface Vec3Snapshot {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface PlayerSummary {
+  username: string;
+  distance: number;
+  position: Vec3Snapshot | null;
+}
+
+export interface EntitySummary {
+  id: number;
+  type: string;
+  name: string;
+  mobType: string | null;
+  distance: number;
+  position: Vec3Snapshot | null;
+}
+
+export interface BlockSummary {
+  name: string;
+  count: number;
+}
+
+export interface ObstacleBlockInfo {
+  position: Vec3Snapshot | null;
+  name: string | null;
+  boundingBox: string | null;
+}
+
+export interface ImmediateObstacleReport {
+  botPosition: Vec3Snapshot | null;
+  yaw: number | null;
+  pitch: number | null;
+  forwardVector: Vec3Snapshot | null;
+  blockBelow: ObstacleBlockInfo;
+  blockAtFeet: ObstacleBlockInfo;
+  blockAtHead: ObstacleBlockInfo;
+  blockFrontFeet: ObstacleBlockInfo;
+  blockFrontHead: ObstacleBlockInfo;
+  appearsStuck: boolean;
+}
+
+export interface PerceptionSnapshot {
+  timestamp: string;
+  nearbyPlayers: PlayerSummary[];
+  nearbyEntities: EntitySummary[];
+  nearbyHostileMobs: EntitySummary[];
+  nearbyBlocksSummary: BlockSummary[];
+  immediateObstacles: ImmediateObstacleReport;
+}
+
+export type MovementMode = "idle" | "come" | "follow";
+
+export interface MovementState {
+  mode: MovementMode;
+  followTarget: string | null;
+  startedAt: string | null;
+  stuckCount: number;
+  lastPathResetReason: string | null;
+  lastKnownGoal: string | null;
+  timeoutAt: string | null;
+}
+
+export interface SafetyFlags {
+  allowMining: boolean;
+  allowCombat: boolean;
+  allowBuilding: boolean;
+  allowInventory: boolean;
+}
+
+export interface BotState {
+  username: string;
+  connected: boolean;
+  spawned: boolean;
+  ready: boolean;
+  alive: boolean;
+  dead: boolean;
+  health: number | null;
+  food: number | null;
+  position: Vec3Snapshot | null;
+  dimension: string | null;
+  world: string | null;
+  nearestPlayers: PlayerSummary[];
+  currentGoal: string | null;
+  currentAction: string | null;
+  movement: MovementState;
+  lastError: string | null;
+  lastDeathTimestamp: string | null;
+  lastChatTimestamp: string | null;
+  lastCommandReceived: string | null;
+  safetyFlags: SafetyFlags;
+  aiBridgeEnabled: boolean;
+  aiBridgeUrl: string | null;
+  lastAiBridgeError: string | null;
+  actionQueueLength: number;
+  runningAction: string | null;
+  blockedReason: string | null;
+}
+
+export interface BotSnapshot extends BotState {
+  timestamp: string;
+}
+
+export type BotEventType =
+  | "login"
+  | "spawn"
+  | "death"
+  | "respawn"
+  | "kicked"
+  | "disconnect"
+  | "chat_command"
+  | "action_started"
+  | "action_completed"
+  | "movement_stuck"
+  | "obstacle_detected"
+  | "safety_rejection"
+  | "ai_bridge_skipped"
+  | "ai_bridge_sent"
+  | "ai_bridge_error"
+  | "state_update"
+  | "error";
+
+export interface BotEvent {
+  id: number;
+  timestamp: string;
+  type: BotEventType;
+  message: string;
+  data?: unknown;
+}
+
+export type BotAction =
+  | { type: "CHAT"; message: string; reason?: string }
+  | { type: "COME_TO_OWNER"; radius?: number }
+  | { type: "FOLLOW_OWNER"; distance?: number }
+  | { type: "STOP_MOVING" }
+  | { type: "RESPAWN" }
+  | { type: "LOOK_AT_OWNER" }
+  | { type: "REPORT_STATE" }
+  | { type: "REPORT_OBSTACLE" }
+  | { type: "REPORT_STATUS" }
+  | { type: "REPORT_WHERE_ARE_YOU" }
+  | { type: "REPORT_NEARBY" }
+  | { type: "REPORT_LOOK" }
+  | { type: "REPORT_HELP" }
+  | { type: "REPORT_DISTANCE" }
+  | { type: "REPORT_DEBUG" }
+  | { type: "REPORT_AI_STATUS" }
+  | { type: "REPORT_ACTION_QUEUE" };
+
+export interface ActionQueueItem {
+  id: number;
+  createdAt: string;
+  requestedBy: string;
+  action: BotAction;
+}
+
+export interface ActionQueueSummary {
+  queued: number;
+  running: string | null;
+  next: string | null;
+}
+
+export interface CommandInput {
+  username: string;
+  message: string;
+}
+
+export interface AiObservation {
+  timestamp: string;
+  bot: BotSnapshot;
+  perception: PerceptionSnapshot;
+  recentEvents: BotEvent[];
+}
+
+export interface AiActionRequest {
+  actions: BotAction[];
+  say?: string;
+}
+
+export interface AiBridgeStatus {
+  enabled: boolean;
+  url: string | null;
+  lastError: string | null;
+}
+
+export interface StateStore {
+  state: BotState;
+  setConnected: (value: boolean) => void;
+  setSpawned: (value: boolean) => void;
+  setReady: (value: boolean) => void;
+  setAlive: (value: boolean) => void;
+  setHealthAndFood: (health: number | null, food: number | null) => void;
+  setPosition: (position: Vec3Snapshot | null) => void;
+  setWorldInfo: (dimension: string | null, world: string | null) => void;
+  setNearestPlayers: (players: PlayerSummary[]) => void;
+  setCurrentGoal: (goal: string | null) => void;
+  setCurrentAction: (action: string | null) => void;
+  setMovementMode: (mode: MovementMode) => void;
+  setMovementStuckCount: (value: number) => void;
+  setMovementPathResetReason: (reason: string | null) => void;
+  setMovementGoal: (goal: string | null) => void;
+  setMovementTimeoutAt: (timeoutAt: string | null) => void;
+  setMovementStartedAt: (startedAt: string | null) => void;
+  setFollowTarget: (target: string | null) => void;
+  setLastError: (message: string | null) => void;
+  setLastDeathTimestamp: (isoTimestamp: string | null) => void;
+  setLastChatTimestamp: (isoTimestamp: string | null) => void;
+  setLastCommandReceived: (message: string | null) => void;
+  setAiBridgeError: (message: string | null) => void;
+  setActionQueueInfo: (queueLength: number, runningAction: string | null) => void;
+  setBlockedReason: (reason: string | null) => void;
+  getBotSnapshot: () => BotSnapshot;
+  addEvent: (type: BotEventType, message: string, data?: unknown) => void;
+  getRecentEvents: (limit?: number) => BotEvent[];
+}
+
+export interface ChatController {
+  setChatReady: (ready: boolean) => void;
+  isChatReady: () => boolean;
+  send: (message: string, reason: string, options?: { bypassRateLimit?: boolean }) => boolean;
+}
+
+export interface SafetyDecision {
+  allowed: boolean;
+  reason?: string;
+  action?: BotAction;
+}
+
+export interface SafetyLayer {
+  isOwner: (username: string) => boolean;
+  isPrivilegedRequester: (requestor: string) => boolean;
+  normalizeChatMessage: (message: string) => string;
+  validateAction: (requestor: string, action: BotAction) => SafetyDecision;
+}
+
+export interface MovementController {
+  applyConservativeMovements: () => void;
+  waitForValidPosition: (timeoutMs: number) => Promise<boolean>;
+  clearMovementState: (reason: string) => void;
+  startComeToOwner: (requestor: string, radiusOverride?: number) => boolean;
+  startFollowOwner: (requestor: string, distanceOverride?: number) => boolean;
+  stop: (reason: string) => void;
+  tryRespawn: (requestor: string) => boolean;
+  lookAtOwner: () => Promise<boolean>;
+  onSpawn: (spawnLabel: string) => Promise<boolean>;
+  onDeath: () => void;
+  onPathReset: (reason: string) => void;
+  onGoalReached: (goalName: string) => void;
+  onPhysicsTick: () => void;
+  getDistanceToOwner: () => number | null;
+  getCurrentGoalDescription: () => string;
+}
+
+export interface PerceptionController {
+  getNearbyPlayers: (radius: number) => PlayerSummary[];
+  getNearbyEntities: (radius: number) => EntitySummary[];
+  getNearbyHostileMobs: (radius: number) => EntitySummary[];
+  getNearbyBlocksSummary: (radius: number) => BlockSummary[];
+  getImmediateObstacles: () => ImmediateObstacleReport;
+  getPerceptionSnapshot: () => PerceptionSnapshot;
+}
+
+export interface ActionController {
+  queueAction: (requestedBy: string, action: BotAction) => void;
+  clearActionQueue: (reason: string) => void;
+  getActionQueueSummary: () => ActionQueueSummary;
+}
+
+export interface AiBridgeController {
+  getStatus: () => AiBridgeStatus;
+  sendObservationToAiBridge: () => Promise<void>;
+  buildObservation: () => AiObservation;
+}
+
+export interface CommandRouter {
+  routeChatMessage: (input: CommandInput) => void;
+}
+
+export interface LifecycleController {
+  bind: () => void;
+}
+
+export interface BotRuntime {
+  bot: Bot;
+  state: StateStore;
+  chat: ChatController;
+  movement: MovementController;
+  perception: PerceptionController;
+  actions: ActionController;
+  aiBridge: AiBridgeController;
+  commands: CommandRouter;
+  lifecycle: LifecycleController;
+}
