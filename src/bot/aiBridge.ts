@@ -18,12 +18,28 @@ function asOptionalNumber(value: unknown): number | undefined {
   return value;
 }
 
+function asOptionalString(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return undefined;
+  return value;
+}
+
 function asBotAction(value: unknown): BotAction | null {
   if (!value || typeof value !== "object") {
     return null;
   }
 
-  const action = value as { type?: unknown; message?: unknown; reason?: unknown; radius?: unknown; distance?: unknown };
+  const action = value as {
+    type?: unknown;
+    message?: unknown;
+    reason?: unknown;
+    radius?: unknown;
+    distance?: unknown;
+    blockName?: unknown;
+    entityName?: unknown;
+    itemName?: unknown;
+  };
+
   if (typeof action.type !== "string") {
     return null;
   }
@@ -37,21 +53,49 @@ function asBotAction(value: unknown): BotAction | null {
         reason: typeof action.reason === "string" ? action.reason : "ai-bridge"
       };
     }
+
     case "COME_TO_OWNER": {
       return {
         type: "COME_TO_OWNER",
         radius: asOptionalNumber(action.radius)
       };
     }
+
     case "FOLLOW_OWNER": {
       return {
         type: "FOLLOW_OWNER",
         distance: asOptionalNumber(action.distance)
       };
     }
+
+    case "MINE_BLOCK": {
+      return {
+        type: "MINE_BLOCK",
+        blockName: asOptionalString(action.blockName)
+      };
+    }
+
+    case "ATTACK_ENTITY": {
+      return {
+        type: "ATTACK_ENTITY",
+        entityName: asOptionalString(action.entityName)
+      };
+    }
+
+    case "PLACE_BLOCK": {
+      return {
+        type: "PLACE_BLOCK",
+        blockName: asOptionalString(action.blockName)
+      };
+    }
+
+    case "OPEN_INVENTORY":
     case "STOP_MOVING":
     case "RESPAWN":
     case "LOOK_AT_OWNER":
+    case "SET_HOME":
+    case "GO_HOME":
+    case "RECOVER":
     case "REPORT_STATE":
     case "REPORT_OBSTACLE":
     case "REPORT_STATUS":
@@ -62,11 +106,31 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_DISTANCE":
     case "REPORT_DEBUG":
     case "REPORT_AI_STATUS":
-    case "REPORT_ACTION_QUEUE": {
+    case "REPORT_ACTION_QUEUE":
+    case "REPORT_CAPABILITIES":
+    case "REPORT_VITALS":
+    case "REPORT_DANGER":
+    case "REPORT_MOVEMENT":
+    case "REPORT_SAFETY_TEST": {
       return {
         type: action.type
       } as BotAction;
     }
+
+    case "EQUIP_ITEM": {
+      return {
+        type: "EQUIP_ITEM",
+        itemName: asOptionalString(action.itemName)
+      };
+    }
+
+    case "EAT_FOOD": {
+      return {
+        type: "EAT_FOOD",
+        itemName: asOptionalString(action.itemName)
+      };
+    }
+
     default:
       return null;
   }
@@ -86,6 +150,7 @@ export function createAiBridgeController(
       timestamp: new Date().toISOString(),
       bot: state.getBotSnapshot(),
       perception: perception.getPerceptionSnapshot(),
+      actionQueue: actions.getActionQueueSummary(),
       recentEvents: state.getRecentEvents(25)
     };
   }

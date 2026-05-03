@@ -2,35 +2,18 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.5: AI-ready architecture**.
+This release is **v0.6: survival + movement polish + locked capability scaffolding**.
 
-- Structured state, perception, commands, actions, and safety layers are implemented.
-- AI bridge is a stub-ready integration point.
-- No Ollama or EMBER web app wiring yet unless you explicitly enable bridge endpoint testing.
-- No mining, combat, building, inventory, or container automation.
+- AI bridge remains optional and disabled by default.
+- Mining/combat/building/inventory remain disabled by default.
+- New survival/danger/vitals reporting and movement recovery tooling are included.
 
-## v0.5 Purpose
+## v0.6 Goals
 
-v0.5 organizes EMBER's Minecraft body so future AI/memory systems can plug in through a safe, action-driven interface:
-
-- modular runtime (`src/bot/*`)
-- central bot state snapshots
-- perception summaries + obstacle reporting
-- command router
-- action queue + execution pipeline
-- safety policy checks
-- in-memory event log (last 100 events)
-- optional AI observation bridge (`ENABLE_AI_BRIDGE`)
-
-## Current Behavior
-
-- Microsoft-auth Mineflayer login with token/session cache in `./data`
-- connect/spawn/death/respawn/kick/disconnect/error logging
-- chat warmup and safe chat send wrapper
-- one-time `EMBER is online.` announce per process start (configurable)
-- owner-gated movement/respawn/debug command actions
-- conservative pathfinder behavior with timeout + stuck-stop handling
-- stuck obstacle snapshot capture
+- Better survival awareness without enabling combat.
+- Better movement robustness when terrain blocks progress.
+- Structured state/perception/action architecture preserved from v0.5.
+- Locked capability scaffolding for future expansion behind safety gates.
 
 ## Project Layout
 
@@ -52,12 +35,6 @@ src/
     logging.ts
     types.ts
 ```
-
-## Requirements
-
-- Node.js 22+
-- Bot Microsoft account added to server whitelist
-- Minecraft Java/Paper server reachable from bot runtime
 
 ## Environment
 
@@ -89,6 +66,16 @@ COME_GOAL_RADIUS=3
 FOLLOW_DISTANCE=3
 PATHFINDER_TIMEOUT_MS=15000
 STUCK_RESET_LIMIT=3
+
+DANGER_SCAN_INTERVAL_MS=3000
+HOSTILE_DANGER_RADIUS=10
+HOSTILE_STOP_RADIUS=4
+STOP_ON_DANGER=true
+
+MIN_GOAL_REFRESH_DISTANCE=2
+FOLLOW_REPATH_INTERVAL_MS=1500
+MOVEMENT_PROGRESS_CHECK_MS=2000
+MIN_PROGRESS_DISTANCE=0.5
 ```
 
 ### Test Server Example
@@ -119,20 +106,34 @@ COME_GOAL_RADIUS=3
 FOLLOW_DISTANCE=3
 PATHFINDER_TIMEOUT_MS=15000
 STUCK_RESET_LIMIT=3
+
+DANGER_SCAN_INTERVAL_MS=3000
+HOSTILE_DANGER_RADIUS=10
+HOSTILE_STOP_RADIUS=4
+STOP_ON_DANGER=true
+
+MIN_GOAL_REFRESH_DISTANCE=2
+FOLLOW_REPATH_INTERVAL_MS=1500
+MOVEMENT_PROGRESS_CHECK_MS=2000
+MIN_PROGRESS_DISTANCE=0.5
 ```
 
-## Commands (v0.5)
+## Commands (v0.6)
 
-Public safe commands:
+Public-safe:
 
 - `Ember hello`
 - `Ember help`
+- `Ember capabilities`
 - `Ember status`
+- `Ember vitals`
+- `Ember danger`
 - `Ember where are you`
 - `Ember nearby`
 - `Ember look`
+- `Ember movement`
 
-Owner-only commands (`OWNER_USERNAME`):
+Owner-only:
 
 - `Ember come`
 - `Ember follow me`
@@ -140,6 +141,10 @@ Owner-only commands (`OWNER_USERNAME`):
 - `Ember respawn`
 - `Ember distance`
 - `Ember obstacle`
+- `Ember set home`
+- `Ember home`
+- `Ember recover`
+- `Ember safety test`
 - `Ember state`
 - `Ember debug`
 - `Ember ai status`
@@ -147,28 +152,33 @@ Owner-only commands (`OWNER_USERNAME`):
 
 ## Safety Rules
 
-- Non-owner chat never controls movement/debug actions.
-- Action execution is rate-limited (`MAX_ACTIONS_PER_MINUTE`).
-- Chat sends are rate-limited and guarded by spawn/ready state.
-- `ALLOW_MINING=false`: no mining/dig automation.
-- `ALLOW_COMBAT=false`: no attack/combat automation.
-- `ALLOW_BUILDING=false`: no block placement automation.
-- `ALLOW_INVENTORY=false`: no inventory/chest/container automation.
+- Non-owner users cannot run owner commands.
+- Chat and actions are rate-limited.
+- `ALLOW_MINING`, `ALLOW_COMBAT`, `ALLOW_BUILDING`, `ALLOW_INVENTORY` default to `false`.
+- Capability action scaffolding exists but is safety-gated and not implemented for execution yet.
 - No eval/arbitrary code execution from chat.
+
+## Survival + Movement Notes
+
+- Periodic danger scan tracks nearby hostiles.
+- If `STOP_ON_DANGER=true` and hostiles are within `HOSTILE_STOP_RADIUS`, bot stops movement and says: `Danger close. I am stopping.`
+- Movement progress checks detect no-progress windows and trigger stuck handling.
+- Stuck handling logs obstacle details and stops movement safely.
+- `Ember obstacle` returns concise summary in chat and logs full JSON.
+- `Ember set home` / `Ember home` are in-memory only (process lifetime, no DB).
 
 ## AI Bridge Stub Behavior
 
-- If `ENABLE_AI_BRIDGE=false`: bridge logs disabled and skips network calls.
-- If `ENABLE_AI_BRIDGE=true`: bot POSTs structured observation payloads to `AI_BRIDGE_URL`.
-- Response may include optional `say` and `actions` fields.
-- All AI-requested actions are still safety-validated before queueing/running.
-- Bridge failures are logged and stored as `lastAiBridgeError`; bot keeps running.
+- `ENABLE_AI_BRIDGE=false`: logs skip and sends nothing.
+- `ENABLE_AI_BRIDGE=true`: sends structured observations to `AI_BRIDGE_URL`.
+- Observation includes bot snapshot, vitals, danger summary, movement state, capabilities, obstacle/perception, recent events, and action queue summary.
+- AI-returned actions still pass safety validation before queueing.
 
 ## Microsoft Login and Session Cache
 
-First run may require device-code auth. Watch logs for the code and verification URL.
+First run may require device-code auth. Use the logged code and verification URL.
 
-Auth/session files are persisted in `./data` (mounted to `/app/data` in Docker) so restarts reuse tokens.
+Session/auth cache persists in `./data` (mounted as `/app/data` in Docker), so reauth is not required each restart.
 
 ## Local Dev
 
@@ -179,7 +189,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Build and start:
+Build and run:
 
 ```bash
 npm run build
@@ -194,7 +204,7 @@ docker compose logs -f ember-minecraft-bot
 docker compose down
 ```
 
-Compose mounts data persistence and restarts unless stopped:
+Compose defaults:
 
 - `./data:/app/data`
 - `restart: unless-stopped`
@@ -206,24 +216,23 @@ cd /apps/ember-minecraft-bot
 git pull
 docker compose down
 docker compose up -d --build
-docker logs ember-minecraft-bot --tail 160
+docker logs ember-minecraft-bot --tail 180
 ```
 
-## v0.5 Test Checklist
+## v0.6 Test Checklist
 
 - `Ember hello`
 - `Ember help`
-- `Ember status`
-- `Ember where are you`
-- `Ember nearby`
-- `Ember look`
+- `Ember capabilities`
+- `Ember vitals`
+- `Ember danger`
+- `Ember movement`
 - `Ember obstacle`
-- `Ember distance`
+- `Ember safety test`
+- `Ember set home`
 - `Ember come`
 - `Ember follow me`
 - `Ember stop`
-- `Ember respawn`
-- `Ember state`
-- `Ember debug`
+- `Ember home`
+- `Ember recover`
 - `Ember ai status`
-- `Ember action queue`

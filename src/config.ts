@@ -1,4 +1,4 @@
-import path from "node:path";
+﻿import path from "node:path";
 
 export interface AppConfig {
   minecraftHost: string;
@@ -20,7 +20,6 @@ export interface AppConfig {
   allowInventory: boolean;
   profilesFolder: string;
 
-  // v0.4 movement defaults kept for compatibility.
   maxComeDistance: number;
   maxFollowStartDistance: number;
   comeGoalRadius: number;
@@ -28,7 +27,16 @@ export interface AppConfig {
   pathfinderTimeoutMs: number;
   stuckResetLimit: number;
 
-  // Internal hardening knobs.
+  dangerScanIntervalMs: number;
+  hostileDangerRadius: number;
+  hostileStopRadius: number;
+  stopOnDanger: boolean;
+
+  minGoalRefreshDistance: number;
+  followRepathIntervalMs: number;
+  movementProgressCheckMs: number;
+  minProgressDistance: number;
+
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
   positionWaitTimeoutMs: number;
@@ -117,6 +125,16 @@ export function loadConfig(): AppConfig {
   const pathfinderTimeoutMs = readInteger("PATHFINDER_TIMEOUT_MS", 15000, 1000);
   const stuckResetLimit = readInteger("STUCK_RESET_LIMIT", 3, 1);
 
+  const dangerScanIntervalMs = readInteger("DANGER_SCAN_INTERVAL_MS", 3000, 250);
+  const hostileDangerRadius = readNumber("HOSTILE_DANGER_RADIUS", 10, 1);
+  const hostileStopRadius = readNumber("HOSTILE_STOP_RADIUS", 4, 1);
+  const stopOnDanger = readBoolean("STOP_ON_DANGER", true);
+
+  const minGoalRefreshDistance = readNumber("MIN_GOAL_REFRESH_DISTANCE", 2, 0.1);
+  const followRepathIntervalMs = readInteger("FOLLOW_REPATH_INTERVAL_MS", 1500, 100);
+  const movementProgressCheckMs = readInteger("MOVEMENT_PROGRESS_CHECK_MS", 2000, 250);
+  const minProgressDistance = readNumber("MIN_PROGRESS_DISTANCE", 0.5, 0.01);
+
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
   const positionWaitTimeoutMs = readInteger("POSITION_WAIT_TIMEOUT_MS", 15000, 1000);
@@ -160,6 +178,14 @@ export function loadConfig(): AppConfig {
     followDistance,
     pathfinderTimeoutMs,
     stuckResetLimit,
+    dangerScanIntervalMs,
+    hostileDangerRadius,
+    hostileStopRadius,
+    stopOnDanger,
+    minGoalRefreshDistance,
+    followRepathIntervalMs,
+    movementProgressCheckMs,
+    minProgressDistance,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

@@ -1,9 +1,11 @@
-import type { AppConfig } from "../config";
+﻿import type { AppConfig } from "../config";
 import type {
   BotEvent,
   BotEventType,
   BotSnapshot,
   BotState,
+  CapabilitySummary,
+  DangerSummary,
   MovementMode,
   PlayerSummary,
   StateStore,
@@ -16,6 +18,27 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function createDefaultDangerSummary(): DangerSummary {
+  return {
+    hostileCount: 0,
+    nearestHostileName: null,
+    nearestHostileDistance: null,
+    proximity: "none"
+  };
+}
+
+function createCapabilities(config: AppConfig): CapabilitySummary {
+  return {
+    movement: true,
+    perception: true,
+    mining: config.allowMining,
+    combat: config.allowCombat,
+    building: config.allowBuilding,
+    inventory: config.allowInventory,
+    ai: config.enableAiBridge
+  };
+}
+
 function createInitialState(config: AppConfig): BotState {
   return {
     username: config.minecraftUsername,
@@ -26,10 +49,19 @@ function createInitialState(config: AppConfig): BotState {
     dead: false,
     health: null,
     food: null,
+    saturation: null,
+    oxygen: null,
+    onFire: null,
+    inLava: null,
+    inWater: null,
+    onGround: null,
     position: null,
+    homePosition: null,
     dimension: null,
     world: null,
     nearestPlayers: [],
+    dangerSummary: createDefaultDangerSummary(),
+    capabilities: createCapabilities(config),
     currentGoal: null,
     currentAction: null,
     movement: {
@@ -37,9 +69,11 @@ function createInitialState(config: AppConfig): BotState {
       followTarget: null,
       startedAt: null,
       stuckCount: 0,
+      noProgressCount: 0,
       lastPathResetReason: null,
       lastKnownGoal: null,
-      timeoutAt: null
+      timeoutAt: null,
+      lastProgressAt: null
     },
     lastError: null,
     lastDeathTimestamp: null,
@@ -106,8 +140,28 @@ export function createStateStore(config: AppConfig): StateStore {
     state.food = food;
   }
 
+  function setVitalsDetails(details: {
+    saturation: number | null;
+    oxygen: number | null;
+    onFire: boolean | null;
+    inLava: boolean | null;
+    inWater: boolean | null;
+    onGround: boolean | null;
+  }): void {
+    state.saturation = details.saturation;
+    state.oxygen = details.oxygen;
+    state.onFire = details.onFire;
+    state.inLava = details.inLava;
+    state.inWater = details.inWater;
+    state.onGround = details.onGround;
+  }
+
   function setPosition(position: Vec3Snapshot | null): void {
     state.position = position;
+  }
+
+  function setHomePosition(position: Vec3Snapshot | null): void {
+    state.homePosition = position;
   }
 
   function setWorldInfo(dimension: string | null, world: string | null): void {
@@ -117,6 +171,14 @@ export function createStateStore(config: AppConfig): StateStore {
 
   function setNearestPlayers(players: PlayerSummary[]): void {
     state.nearestPlayers = players;
+  }
+
+  function setDangerSummary(danger: DangerSummary): void {
+    state.dangerSummary = { ...danger };
+  }
+
+  function setCapabilities(capabilities: CapabilitySummary): void {
+    state.capabilities = { ...capabilities };
   }
 
   function setCurrentGoal(goal: string | null): void {
@@ -135,6 +197,10 @@ export function createStateStore(config: AppConfig): StateStore {
     state.movement.stuckCount = value;
   }
 
+  function setMovementNoProgressCount(value: number): void {
+    state.movement.noProgressCount = value;
+  }
+
   function setMovementPathResetReason(reason: string | null): void {
     state.movement.lastPathResetReason = reason;
   }
@@ -149,6 +215,10 @@ export function createStateStore(config: AppConfig): StateStore {
 
   function setMovementStartedAt(startedAt: string | null): void {
     state.movement.startedAt = startedAt;
+  }
+
+  function setMovementLastProgressAt(timestamp: string | null): void {
+    state.movement.lastProgressAt = timestamp;
   }
 
   function setFollowTarget(target: string | null): void {
@@ -190,6 +260,9 @@ export function createStateStore(config: AppConfig): StateStore {
       timestamp: nowIso(),
       nearestPlayers: state.nearestPlayers.map((player) => ({ ...player })),
       position: state.position ? { ...state.position } : null,
+      homePosition: state.homePosition ? { ...state.homePosition } : null,
+      dangerSummary: { ...state.dangerSummary },
+      capabilities: { ...state.capabilities },
       movement: { ...state.movement },
       safetyFlags: { ...state.safetyFlags }
     };
@@ -207,17 +280,23 @@ export function createStateStore(config: AppConfig): StateStore {
     setReady,
     setAlive,
     setHealthAndFood,
+    setVitalsDetails,
     setPosition,
+    setHomePosition,
     setWorldInfo,
     setNearestPlayers,
+    setDangerSummary,
+    setCapabilities,
     setCurrentGoal,
     setCurrentAction,
     setMovementMode,
     setMovementStuckCount,
+    setMovementNoProgressCount,
     setMovementPathResetReason,
     setMovementGoal,
     setMovementTimeoutAt,
     setMovementStartedAt,
+    setMovementLastProgressAt,
     setFollowTarget,
     setLastError,
     setLastDeathTimestamp,

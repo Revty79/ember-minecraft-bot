@@ -195,9 +195,34 @@ export function createLifecycleController(
 
     bot.on("physicTick", () => {
       const health = Number.isFinite(bot.health) ? bot.health : null;
-      const runtime = bot as unknown as { food?: number };
+      const runtime = bot as unknown as {
+        food?: number;
+        foodSaturation?: number;
+        saturation?: number;
+        oxygenLevel?: number;
+      };
+      const entityRuntime = bot.entity as unknown as {
+        onGround?: boolean;
+        isInWater?: boolean;
+        isInLava?: boolean;
+        isOnFire?: boolean;
+      };
       const food = Number.isFinite(runtime.food) ? Number(runtime.food) : null;
+      const saturationRaw =
+        Number.isFinite(runtime.foodSaturation) ? Number(runtime.foodSaturation) :
+        Number.isFinite(runtime.saturation) ? Number(runtime.saturation) :
+        null;
+      const oxygen = Number.isFinite(runtime.oxygenLevel) ? Number(runtime.oxygenLevel) : null;
+
       state.setHealthAndFood(health, food);
+      state.setVitalsDetails({
+        saturation: saturationRaw,
+        oxygen,
+        onFire: typeof entityRuntime?.isOnFire === "boolean" ? entityRuntime.isOnFire : null,
+        inLava: typeof entityRuntime?.isInLava === "boolean" ? entityRuntime.isInLava : null,
+        inWater: typeof entityRuntime?.isInWater === "boolean" ? entityRuntime.isInWater : null,
+        onGround: typeof entityRuntime?.onGround === "boolean" ? entityRuntime.onGround : null
+      });
       state.setAlive(isBotAlive(bot));
 
       const position = bot.entity?.position;

@@ -1,5 +1,10 @@
-import type { AppConfig } from "../config";
+﻿import type { AppConfig } from "../config";
 import type { BotAction, Logger, SafetyDecision, SafetyLayer, StateStore } from "./types";
+
+const MINING_ACTIONS = new Set<BotAction["type"]>(["MINE_BLOCK"]);
+const COMBAT_ACTIONS = new Set<BotAction["type"]>(["ATTACK_ENTITY"]);
+const BUILDING_ACTIONS = new Set<BotAction["type"]>(["PLACE_BLOCK"]);
+const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY", "EQUIP_ITEM", "EAT_FOOD"]);
 
 export function createSafetyLayer(config: AppConfig, state: StateStore, logger: Logger): SafetyLayer {
   const actionTimestamps: number[] = [];
@@ -11,12 +16,16 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "STOP_MOVING",
     "RESPAWN",
     "LOOK_AT_OWNER",
+    "SET_HOME",
+    "GO_HOME",
+    "RECOVER",
     "REPORT_STATE",
     "REPORT_OBSTACLE",
     "REPORT_DISTANCE",
     "REPORT_DEBUG",
     "REPORT_AI_STATUS",
-    "REPORT_ACTION_QUEUE"
+    "REPORT_ACTION_QUEUE",
+    "REPORT_SAFETY_TEST"
   ]);
 
   function isOwner(username: string): boolean {
@@ -63,27 +72,29 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
   }
 
   function validateCapabilityFlags(action: BotAction, requestor: string): SafetyDecision {
-    if (!config.allowMining && action.type === "CHAT" && action.message.toLowerCase().includes("mining")) {
+    if (!config.allowMining && MINING_ACTIONS.has(action.type)) {
       return reject("Mining actions are disabled by policy.", requestor, action);
     }
 
-    if (!config.allowCombat && action.type === "CHAT" && action.message.toLowerCase().includes("combat")) {
+    if (!config.allowCombat && COMBAT_ACTIONS.has(action.type)) {
       return reject("Combat actions are disabled by policy.", requestor, action);
     }
 
-    if (!config.allowBuilding && action.type === "CHAT" && action.message.toLowerCase().includes("building")) {
+    if (!config.allowBuilding && BUILDING_ACTIONS.has(action.type)) {
       return reject("Building actions are disabled by policy.", requestor, action);
     }
 
-    if (!config.allowInventory && action.type === "CHAT" && action.message.toLowerCase().includes("inventory")) {
+    if (!config.allowInventory && INVENTORY_ACTIONS.has(action.type)) {
       return reject("Inventory actions are disabled by policy.", requestor, action);
     }
 
     return { allowed: true, action };
   }
 
-  function validateAction(requestor: string, action: BotAction): SafetyDecision {
-    if (!canRunAnotherAction()) {
+  function validateAction(requestor: string, action: BotAction, options?: { dryRun?: boolean }): SafetyDecision {
+    const dryRun = options?.dryRun ?? false;
+
+    if (!dryRun && !canRunAnotherAction()) {
       return reject("Action rate limit reached.", requestor, action);
     }
 
@@ -104,8 +115,11 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
           }
         : action;
 
-    recordActionRateUsage();
-    state.setBlockedReason(null);
+    if (!dryRun) {
+      recordActionRateUsage();
+      state.setBlockedReason(null);
+    }
+
     return { allowed: true, action: normalizedAction };
   }
 

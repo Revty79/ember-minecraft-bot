@@ -1,7 +1,8 @@
-import { Vec3 } from "vec3";
+﻿import { Vec3 } from "vec3";
 import type { Bot } from "mineflayer";
 import type {
   BlockSummary,
+  DangerSummary,
   EntitySummary,
   ImmediateObstacleReport,
   ObstacleBlockInfo,
@@ -35,6 +36,26 @@ const HOSTILE_MOBS = new Set<string>([
   "zombified_piglin"
 ]);
 
+const PASSABLE_BLOCKS = new Set<string>([
+  "air",
+  "cave_air",
+  "void_air",
+  "water",
+  "flowing_water",
+  "lava",
+  "flowing_lava",
+  "short_grass",
+  "tall_grass",
+  "fern",
+  "large_fern",
+  "vine",
+  "snow",
+  "torch",
+  "wall_torch",
+  "redstone_torch",
+  "wall_redstone_torch"
+]);
+
 function toVec3Snapshot(position: { x: number; y: number; z: number } | null | undefined): Vec3Snapshot | null {
   if (!position) return null;
   if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) return null;
@@ -60,6 +81,18 @@ function blockInfo(bot: Bot, position: Vec3 | null): ObstacleBlockInfo {
     name: block?.name ?? null,
     boundingBox: block?.boundingBox ?? null
   };
+}
+
+function isFluid(name: string | null): boolean {
+  if (!name) return false;
+  return name.includes("water") || name.includes("lava");
+}
+
+function isPassableBlock(name: string | null, boundingBox: string | null): boolean | null {
+  if (!name) return null;
+  if (PASSABLE_BLOCKS.has(name)) return true;
+  if (boundingBox === "empty") return true;
+  return false;
 }
 
 export function createPerceptionController(bot: Bot, state: StateStore, logger: Logger): PerceptionController {
@@ -137,6 +170,35 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     });
   }
 
+  function getDangerSummary(radius = 24): DangerSummary {
+    const hostiles = getNearbyHostileMobs(radius);
+    if (hostiles.length === 0) {
+      return {
+        hostileCount: 0,
+        nearestHostileName: null,
+        nearestHostileDistance: null,
+        proximity: "none"
+      };
+    }
+
+    const nearest = hostiles[0];
+    const distance = nearest.distance;
+
+    let proximity: DangerSummary["proximity"] = "far";
+    if (distance <= 4) {
+      proximity = "close";
+    } else if (distance <= 10) {
+      proximity = "medium";
+    }
+
+    return {
+      hostileCount: hostiles.length,
+      nearestHostileName: nearest.name,
+      nearestHostileDistance: distance,
+      proximity
+    };
+  }
+
   function getNearbyBlocksSummary(radius: number): BlockSummary[] {
     if (!bot.entity) return [];
 
@@ -173,8 +235,15 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     let blockAtHead: ObstacleBlockInfo = { position: null, name: null, boundingBox: null };
     let blockFrontFeet: ObstacleBlockInfo = { position: null, name: null, boundingBox: null };
     let blockFrontHead: ObstacleBlockInfo = { position: null, name: null, boundingBox: null };
+    let blockFrontStepUp: ObstacleBlockInfo = { position: null, name: null, boundingBox: null };
+    let blockFrontStepDown: ObstacleBlockInfo = { position: null, name: null, boundingBox: null };
+    let fluidAtFeet: string | null = null;
+    let fluidFrontFeet: string | null = null;
+    let fluidFrontStepDown: string | null = null;
+    let frontPassable: boolean | null = null;
+    let stepUpPossible: boolean | null = null;
     let forwardVector: Vec3Snapshot | null = null;
-    let appearsStuck = state.state.movement.stuckCount > 0;
+    let appearsStuck = state.state.movement.stuckCount > 0 || state.state.movement.noProgressCount > 0;
 
     if (position && pos && Number.isFinite(yaw ?? Number.NaN)) {
       const floored = position.floored();
@@ -195,6 +264,25 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       blockAtHead = blockInfo(bot, new Vec3(floored.x, floored.y + 1, floored.z));
       blockFrontFeet = blockInfo(bot, new Vec3(frontX, feetY, frontZ));
       blockFrontHead = blockInfo(bot, new Vec3(frontX, feetY + 1, frontZ));
+      blockFrontStepUp = blockInfo(bot, new Vec3(frontX, feetY + 1, frontZ));
+      blockFrontStepDown = blockInfo(bot, new Vec3(frontX, feetY - 1, frontZ));
+      const blockFrontStepUpHead = blockInfo(bot, new Vec3(frontX, feetY + 2, frontZ));
+
+      fluidAtFeet = isFluid(blockAtFeet.name) ? blockAtFeet.name : null;
+      fluidFrontFeet = isFluid(blockFrontFeet.name) ? blockFrontFeet.name : null;
+      fluidFrontStepDown = isFluid(blockFrontStepDown.name) ? blockFrontStepDown.name : null;
+
+      const frontFeetPassable = isPassableBlock(blockFrontFeet.name, blockFrontFeet.boundingBox);
+      const frontHeadPassable = isPassableBlock(blockFrontHead.name, blockFrontHead.boundingBox);
+      if (frontFeetPassable !== null && frontHeadPassable !== null) {
+        frontPassable = frontFeetPassable && frontHeadPassable;
+      }
+
+      const stepSpacePassable = isPassableBlock(blockFrontStepUp.name, blockFrontStepUp.boundingBox);
+      const stepHeadPassable = isPassableBlock(blockFrontStepUpHead.name, blockFrontStepUpHead.boundingBox);
+      if (frontFeetPassable !== null && stepSpacePassable !== null && stepHeadPassable !== null) {
+        stepUpPossible = !frontFeetPassable && stepSpacePassable && stepHeadPassable;
+      }
 
       const now = Date.now();
       if (state.state.movement.mode !== "idle") {
@@ -225,6 +313,13 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       blockAtHead,
       blockFrontFeet,
       blockFrontHead,
+      blockFrontStepUp,
+      blockFrontStepDown,
+      fluidAtFeet,
+      fluidFrontFeet,
+      fluidFrontStepDown,
+      frontPassable,
+      stepUpPossible,
       appearsStuck
     };
 
@@ -242,7 +337,8 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       nearbyEntities: getNearbyEntities(24),
       nearbyHostileMobs: getNearbyHostileMobs(24),
       nearbyBlocksSummary: getNearbyBlocksSummary(4),
-      immediateObstacles: getImmediateObstacles()
+      immediateObstacles: getImmediateObstacles(),
+      dangerSummary: getDangerSummary(24)
     };
     return snapshot;
   }
@@ -253,6 +349,7 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     getNearbyHostileMobs,
     getNearbyBlocksSummary,
     getImmediateObstacles,
+    getDangerSummary,
     getPerceptionSnapshot
   };
 }

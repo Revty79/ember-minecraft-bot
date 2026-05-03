@@ -49,8 +49,23 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember capabilities") {
+      actions.queueAction(username, { type: "REPORT_CAPABILITIES" });
+      return;
+    }
+
     if (normalized === "ember status") {
       actions.queueAction(username, { type: "REPORT_STATUS" });
+      return;
+    }
+
+    if (normalized === "ember vitals") {
+      actions.queueAction(username, { type: "REPORT_VITALS" });
+      return;
+    }
+
+    if (normalized === "ember danger") {
+      actions.queueAction(username, { type: "REPORT_DANGER" });
       return;
     }
 
@@ -66,6 +81,11 @@ export function createCommandRouter(
 
     if (normalized === "ember look") {
       actions.queueAction(username, { type: "REPORT_LOOK" });
+      return;
+    }
+
+    if (normalized === "ember movement") {
+      actions.queueAction(username, { type: "REPORT_MOVEMENT" });
       return;
     }
 
@@ -86,6 +106,26 @@ export function createCommandRouter(
 
     if (normalized === "ember respawn") {
       queueOwnerOnlyCommand(username, { type: "RESPAWN" }, "respawn");
+      return;
+    }
+
+    if (normalized === "ember set home") {
+      queueOwnerOnlyCommand(username, { type: "SET_HOME" }, "set-home");
+      return;
+    }
+
+    if (normalized === "ember home") {
+      queueOwnerOnlyCommand(username, { type: "GO_HOME" }, "home");
+      return;
+    }
+
+    if (normalized === "ember recover") {
+      queueOwnerOnlyCommand(username, { type: "RECOVER" }, "recover");
+      return;
+    }
+
+    if (normalized === "ember safety test") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SAFETY_TEST" }, "safety-test");
       return;
     }
 

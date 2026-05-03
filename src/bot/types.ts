@@ -1,4 +1,4 @@
-import type { Bot } from "mineflayer";
+﻿import type { Bot } from "mineflayer";
 
 export type LogPrefix =
   | "config"
@@ -12,7 +12,8 @@ export type LogPrefix =
   | "pathfinder"
   | "perception"
   | "ai"
-  | "state";
+  | "state"
+  | "survival";
 
 export interface Logger {
   log: (prefix: LogPrefix, message: string, data?: unknown) => void;
@@ -62,7 +63,33 @@ export interface ImmediateObstacleReport {
   blockAtHead: ObstacleBlockInfo;
   blockFrontFeet: ObstacleBlockInfo;
   blockFrontHead: ObstacleBlockInfo;
+  blockFrontStepUp: ObstacleBlockInfo;
+  blockFrontStepDown: ObstacleBlockInfo;
+  fluidAtFeet: string | null;
+  fluidFrontFeet: string | null;
+  fluidFrontStepDown: string | null;
+  frontPassable: boolean | null;
+  stepUpPossible: boolean | null;
   appearsStuck: boolean;
+}
+
+export type DangerProximity = "none" | "far" | "medium" | "close";
+
+export interface DangerSummary {
+  hostileCount: number;
+  nearestHostileName: string | null;
+  nearestHostileDistance: number | null;
+  proximity: DangerProximity;
+}
+
+export interface CapabilitySummary {
+  movement: boolean;
+  perception: boolean;
+  mining: boolean;
+  combat: boolean;
+  building: boolean;
+  inventory: boolean;
+  ai: boolean;
 }
 
 export interface PerceptionSnapshot {
@@ -72,18 +99,21 @@ export interface PerceptionSnapshot {
   nearbyHostileMobs: EntitySummary[];
   nearbyBlocksSummary: BlockSummary[];
   immediateObstacles: ImmediateObstacleReport;
+  dangerSummary: DangerSummary;
 }
 
-export type MovementMode = "idle" | "come" | "follow";
+export type MovementMode = "idle" | "come" | "follow" | "home";
 
 export interface MovementState {
   mode: MovementMode;
   followTarget: string | null;
   startedAt: string | null;
   stuckCount: number;
+  noProgressCount: number;
   lastPathResetReason: string | null;
   lastKnownGoal: string | null;
   timeoutAt: string | null;
+  lastProgressAt: string | null;
 }
 
 export interface SafetyFlags {
@@ -102,10 +132,19 @@ export interface BotState {
   dead: boolean;
   health: number | null;
   food: number | null;
+  saturation: number | null;
+  oxygen: number | null;
+  onFire: boolean | null;
+  inLava: boolean | null;
+  inWater: boolean | null;
+  onGround: boolean | null;
   position: Vec3Snapshot | null;
+  homePosition: Vec3Snapshot | null;
   dimension: string | null;
   world: string | null;
   nearestPlayers: PlayerSummary[];
+  dangerSummary: DangerSummary;
+  capabilities: CapabilitySummary;
   currentGoal: string | null;
   currentAction: string | null;
   movement: MovementState;
@@ -160,6 +199,9 @@ export type BotAction =
   | { type: "STOP_MOVING" }
   | { type: "RESPAWN" }
   | { type: "LOOK_AT_OWNER" }
+  | { type: "SET_HOME" }
+  | { type: "GO_HOME" }
+  | { type: "RECOVER" }
   | { type: "REPORT_STATE" }
   | { type: "REPORT_OBSTACLE" }
   | { type: "REPORT_STATUS" }
@@ -170,7 +212,18 @@ export type BotAction =
   | { type: "REPORT_DISTANCE" }
   | { type: "REPORT_DEBUG" }
   | { type: "REPORT_AI_STATUS" }
-  | { type: "REPORT_ACTION_QUEUE" };
+  | { type: "REPORT_ACTION_QUEUE" }
+  | { type: "REPORT_CAPABILITIES" }
+  | { type: "REPORT_VITALS" }
+  | { type: "REPORT_DANGER" }
+  | { type: "REPORT_MOVEMENT" }
+  | { type: "REPORT_SAFETY_TEST" }
+  | { type: "MINE_BLOCK"; blockName?: string }
+  | { type: "ATTACK_ENTITY"; entityName?: string }
+  | { type: "PLACE_BLOCK"; blockName?: string }
+  | { type: "OPEN_INVENTORY" }
+  | { type: "EQUIP_ITEM"; itemName?: string }
+  | { type: "EAT_FOOD"; itemName?: string };
 
 export interface ActionQueueItem {
   id: number;
@@ -194,6 +247,7 @@ export interface AiObservation {
   timestamp: string;
   bot: BotSnapshot;
   perception: PerceptionSnapshot;
+  actionQueue: ActionQueueSummary;
   recentEvents: BotEvent[];
 }
 
@@ -215,17 +269,30 @@ export interface StateStore {
   setReady: (value: boolean) => void;
   setAlive: (value: boolean) => void;
   setHealthAndFood: (health: number | null, food: number | null) => void;
+  setVitalsDetails: (details: {
+    saturation: number | null;
+    oxygen: number | null;
+    onFire: boolean | null;
+    inLava: boolean | null;
+    inWater: boolean | null;
+    onGround: boolean | null;
+  }) => void;
   setPosition: (position: Vec3Snapshot | null) => void;
+  setHomePosition: (position: Vec3Snapshot | null) => void;
   setWorldInfo: (dimension: string | null, world: string | null) => void;
   setNearestPlayers: (players: PlayerSummary[]) => void;
+  setDangerSummary: (danger: DangerSummary) => void;
+  setCapabilities: (capabilities: CapabilitySummary) => void;
   setCurrentGoal: (goal: string | null) => void;
   setCurrentAction: (action: string | null) => void;
   setMovementMode: (mode: MovementMode) => void;
   setMovementStuckCount: (value: number) => void;
+  setMovementNoProgressCount: (value: number) => void;
   setMovementPathResetReason: (reason: string | null) => void;
   setMovementGoal: (goal: string | null) => void;
   setMovementTimeoutAt: (timeoutAt: string | null) => void;
   setMovementStartedAt: (startedAt: string | null) => void;
+  setMovementLastProgressAt: (timestamp: string | null) => void;
   setFollowTarget: (target: string | null) => void;
   setLastError: (message: string | null) => void;
   setLastDeathTimestamp: (isoTimestamp: string | null) => void;
@@ -255,7 +322,7 @@ export interface SafetyLayer {
   isOwner: (username: string) => boolean;
   isPrivilegedRequester: (requestor: string) => boolean;
   normalizeChatMessage: (message: string) => string;
-  validateAction: (requestor: string, action: BotAction) => SafetyDecision;
+  validateAction: (requestor: string, action: BotAction, options?: { dryRun?: boolean }) => SafetyDecision;
 }
 
 export interface MovementController {
@@ -264,7 +331,10 @@ export interface MovementController {
   clearMovementState: (reason: string) => void;
   startComeToOwner: (requestor: string, radiusOverride?: number) => boolean;
   startFollowOwner: (requestor: string, distanceOverride?: number) => boolean;
+  setHome: (requestor: string) => boolean;
+  goHome: (requestor: string) => boolean;
   stop: (reason: string) => void;
+  stopForDanger: (reason: string) => void;
   tryRespawn: (requestor: string) => boolean;
   lookAtOwner: () => Promise<boolean>;
   onSpawn: (spawnLabel: string) => Promise<boolean>;
@@ -274,6 +344,8 @@ export interface MovementController {
   onPhysicsTick: () => void;
   getDistanceToOwner: () => number | null;
   getCurrentGoalDescription: () => string;
+  getMode: () => MovementMode;
+  isMoving: () => boolean;
 }
 
 export interface PerceptionController {
@@ -282,12 +354,14 @@ export interface PerceptionController {
   getNearbyHostileMobs: (radius: number) => EntitySummary[];
   getNearbyBlocksSummary: (radius: number) => BlockSummary[];
   getImmediateObstacles: () => ImmediateObstacleReport;
+  getDangerSummary: (radius?: number) => DangerSummary;
   getPerceptionSnapshot: () => PerceptionSnapshot;
 }
 
 export interface ActionController {
   queueAction: (requestedBy: string, action: BotAction) => void;
   clearActionQueue: (reason: string) => void;
+  clearMovementActions: (reason: string) => void;
   getActionQueueSummary: () => ActionQueueSummary;
 }
 

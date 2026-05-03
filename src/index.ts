@@ -39,6 +39,16 @@ logger.log(
   "config",
   `movement maxCome=${config.maxComeDistance} maxFollowStart=${config.maxFollowStartDistance} comeRadius=${config.comeGoalRadius} followDistance=${config.followDistance} timeoutMs=${config.pathfinderTimeoutMs} stuckLimit=${config.stuckResetLimit}`
 );
+logger.log(
+  "config",
+  `movement polish minGoalRefresh=${config.minGoalRefreshDistance} repathMs=${config.followRepathIntervalMs} progressCheckMs=${config.movementProgressCheckMs} minProgress=${config.minProgressDistance}`
+);
+logger.log(
+  "config",
+  `survival dangerScanMs=${config.dangerScanIntervalMs} dangerRadius=${config.hostileDangerRadius} stopRadius=${config.hostileStopRadius} stopOnDanger=${String(
+    config.stopOnDanger
+  )}`
+);
 
 const bot = createMineflayerBot(config, logger);
 const state = createStateStore(config);
@@ -86,11 +96,52 @@ const observationInterval = setInterval(() => {
 }, config.observationIntervalMs);
 observationInterval.unref();
 
+let lastDangerStopAt = 0;
+const dangerInterval = setInterval(() => {
+  const danger = perception.getDangerSummary(config.hostileDangerRadius);
+  state.setDangerSummary(danger);
+
+  if (!config.stopOnDanger) {
+    return;
+  }
+
+  if (!movement.isMoving()) {
+    return;
+  }
+
+  if (danger.nearestHostileDistance === null || danger.nearestHostileDistance > config.hostileStopRadius) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastDangerStopAt < 5000) {
+    return;
+  }
+
+  lastDangerStopAt = now;
+  logger.warn(
+    "survival",
+    `danger detected nearest=${danger.nearestHostileName ?? "unknown"} distance=${danger.nearestHostileDistance.toFixed(
+      1
+    )} mode=${movement.getMode()}`
+  );
+
+  state.addEvent("state_update", "Danger close stop triggered", {
+    danger,
+    mode: movement.getMode()
+  });
+
+  actions.clearMovementActions("danger-close");
+  movement.stopForDanger("danger-close");
+  chat.send("Danger close. I am stopping.", "danger-stop", { bypassRateLimit: true });
+}, config.dangerScanIntervalMs);
+dangerInterval.unref();
+
 const stateLogInterval = setInterval(() => {
   const snapshot = state.getBotSnapshot();
   logger.log(
     "state",
-    `summary ready=${snapshot.ready} alive=${snapshot.alive} mode=${snapshot.movement.mode} queue=${snapshot.actionQueueLength} players=${snapshot.nearestPlayers.length}`
+    `summary ready=${snapshot.ready} alive=${snapshot.alive} mode=${snapshot.movement.mode} queue=${snapshot.actionQueueLength} players=${snapshot.nearestPlayers.length} danger=${snapshot.dangerSummary.proximity}`
   );
 }, config.stateLogIntervalMs);
 stateLogInterval.unref();
@@ -98,6 +149,7 @@ stateLogInterval.unref();
 function shutdown(signal: string): void {
   logger.log("connect", `Received ${signal}, shutting down...`);
   clearInterval(observationInterval);
+  clearInterval(dangerInterval);
   clearInterval(stateLogInterval);
   actions.clearActionQueue("shutdown");
   movement.stop("shutdown");

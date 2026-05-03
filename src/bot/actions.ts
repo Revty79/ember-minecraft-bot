@@ -7,12 +7,31 @@ import type {
   AiBridgeStatus,
   BotAction,
   ChatController,
+  DangerSummary,
   Logger,
   MovementController,
+  MovementMode,
   PerceptionController,
   SafetyLayer,
   StateStore
 } from "./types";
+
+const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
+  "COME_TO_OWNER",
+  "FOLLOW_OWNER",
+  "STOP_MOVING",
+  "GO_HOME",
+  "LOOK_AT_OWNER"
+]);
+
+const SCAFFOLDED_CAPABILITY_ACTIONS = new Set<BotAction["type"]>([
+  "MINE_BLOCK",
+  "ATTACK_ENTITY",
+  "PLACE_BLOCK",
+  "OPEN_INVENTORY",
+  "EQUIP_ITEM",
+  "EAT_FOOD"
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -32,14 +51,34 @@ function describeAction(action: BotAction): string {
       return "RESPAWN";
     case "LOOK_AT_OWNER":
       return "LOOK_AT_OWNER";
+    case "SET_HOME":
+      return "SET_HOME";
+    case "GO_HOME":
+      return "GO_HOME";
+    case "RECOVER":
+      return "RECOVER";
     default:
       return action.type;
   }
 }
 
+function formatDanger(danger: DangerSummary): string {
+  if (danger.hostileCount === 0 || danger.nearestHostileDistance === null || !danger.nearestHostileName) {
+    return "no hostiles nearby";
+  }
+  return `${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(1)} (${danger.proximity})`;
+}
+
 function isFinitePosition(position: { x: number; y: number; z: number } | null | undefined): boolean {
   if (!position) return false;
   return Number.isFinite(position.x) && Number.isFinite(position.y) && Number.isFinite(position.z);
+}
+
+function movementModeLabel(mode: MovementMode, stuckCount: number): string {
+  if (stuckCount > 0) return "stuck";
+  if (mode === "come") return "coming";
+  if (mode === "follow") return "following";
+  return mode;
 }
 
 export function createActionController(
@@ -110,6 +149,30 @@ export function createActionController(
     logger.log("action", `queue cleared reason=${reason} dropped=${dropped}`);
   }
 
+  function clearMovementActions(reason: string): void {
+    const kept: ActionQueueItem[] = [];
+    let removed = 0;
+
+    for (const item of queue) {
+      if (MOVEMENT_ACTION_TYPES.has(item.action.type)) {
+        removed += 1;
+        continue;
+      }
+      kept.push(item);
+    }
+
+    queue.splice(0, queue.length, ...kept);
+    syncQueueState();
+
+    if (removed > 0) {
+      logger.log("action", `movement actions cleared reason=${reason} removed=${removed}`);
+      state.addEvent("state_update", "Movement actions cleared", {
+        reason,
+        removed
+      });
+    }
+  }
+
   async function processQueue(): Promise<void> {
     if (running) return;
 
@@ -176,8 +239,9 @@ export function createActionController(
       }
 
       case "STOP_MOVING": {
+        clearMovementActions("stop");
         movement.stop("stop command");
-        chat.send("Stopping.", "stop");
+        chat.send("Stopped.", "stop");
         return true;
       }
 
@@ -191,6 +255,40 @@ export function createActionController(
           chat.send(`I can't see ${config.ownerUsername} right now.`, "look-at-owner-failed");
         }
         return looked;
+      }
+
+      case "SET_HOME": {
+        return movement.setHome(item.requestedBy);
+      }
+
+      case "GO_HOME": {
+        return movement.goHome(item.requestedBy);
+      }
+
+      case "RECOVER": {
+        logger.log("survival", "Recovery requested.");
+        clearMovementActions("recover");
+        movement.stop("recover");
+
+        const snapshot = state.getBotSnapshot();
+        if (!snapshot.alive) {
+          const requested = movement.tryRespawn(item.requestedBy);
+          if (!requested) {
+            chat.send("Recover: respawn request failed.", "recover-respawn-failed");
+            return false;
+          }
+          chat.send("Recover: respawn requested.", "recover-respawn");
+          return true;
+        }
+
+        const pos = snapshot.position
+          ? `(${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}, ${snapshot.position.z.toFixed(1)})`
+          : "unknown";
+        chat.send(
+          `Recover: ready=${snapshot.ready}, alive=${snapshot.alive}, hp=${snapshot.health ?? "unknown"}, food=${snapshot.food ?? "unknown"}, pos=${pos}.`,
+          "recover-alive"
+        );
+        return true;
       }
 
       case "REPORT_STATUS": {
@@ -273,7 +371,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, status, where are you, nearby, look. Owner: come, follow me, stop, respawn, distance, obstacle, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, danger, where are you, nearby, look, movement. Owner: come, follow me, stop, respawn, distance, obstacle, set home, home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -297,8 +395,10 @@ export function createActionController(
 
         const feet = obstacle.blockFrontFeet.name ?? "unknown";
         const head = obstacle.blockFrontHead.name ?? "unknown";
+        const below = obstacle.blockBelow.name ?? "unknown";
+        const passable = obstacle.frontPassable === null ? "unknown" : String(obstacle.frontPassable);
         const stuck = obstacle.appearsStuck ? "yes" : "no";
-        chat.send(`Obstacle: front=${feet}/${head}, stuck=${stuck}.`, "obstacle");
+        chat.send(`Obstacle: front=${feet}/${head}, below=${below}, passable=${passable}, stuck=${stuck}.`, "obstacle");
         return true;
       }
 
@@ -349,9 +449,98 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_CAPABILITIES": {
+        const caps = state.state.capabilities;
+        chat.send(
+          `Capabilities: movement/perception enabled. mining=${String(caps.mining)}, combat=${String(
+            caps.combat
+          )}, building=${String(caps.building)}, inventory=${String(caps.inventory)}, ai=${String(caps.ai)}.`,
+          "capabilities"
+        );
+        return true;
+      }
+
+      case "REPORT_VITALS": {
+        const snapshot = state.getBotSnapshot();
+        const pos = snapshot.position
+          ? `(${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}, ${snapshot.position.z.toFixed(1)})`
+          : "unknown";
+        const dangerText = formatDanger(snapshot.dangerSummary);
+
+        chat.send(
+          `Vitals: hp=${snapshot.health ?? "unknown"}, food=${snapshot.food ?? "unknown"}, sat=${snapshot.saturation ?? "unknown"}, oxy=${snapshot.oxygen ?? "unknown"}, alive=${snapshot.alive}, pos=${pos}, danger=${dangerText}.`,
+          "vitals"
+        );
+        return true;
+      }
+
+      case "REPORT_DANGER": {
+        const danger = perception.getDangerSummary(config.hostileDangerRadius);
+        state.setDangerSummary(danger);
+
+        if (danger.hostileCount === 0 || danger.nearestHostileDistance === null || !danger.nearestHostileName) {
+          chat.send("Danger: no hostiles nearby.", "danger-none");
+          return true;
+        }
+
+        chat.send(
+          `Danger: nearest ${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(1)} blocks.`,
+          "danger-report"
+        );
+        return true;
+      }
+
+      case "REPORT_MOVEMENT": {
+        const snapshot = state.getBotSnapshot();
+        const mode = movementModeLabel(snapshot.movement.mode, snapshot.movement.stuckCount);
+        const goal = snapshot.movement.lastKnownGoal ?? snapshot.currentGoal ?? "none";
+        const distance = movement.getDistanceToOwner();
+        const distanceText = distance === null ? "unavailable" : distance.toFixed(1);
+
+        chat.send(
+          `Movement: mode=${mode}, goal=${goal}, stuckCount=${snapshot.movement.stuckCount}, distanceToOwner=${distanceText}.`,
+          "movement"
+        );
+        return true;
+      }
+
+      case "REPORT_SAFETY_TEST": {
+        const mining = safety.validateAction(item.requestedBy, { type: "MINE_BLOCK" }, { dryRun: true });
+        const combat = safety.validateAction(item.requestedBy, { type: "ATTACK_ENTITY" }, { dryRun: true });
+        const building = safety.validateAction(item.requestedBy, { type: "PLACE_BLOCK" }, { dryRun: true });
+        const inventory = safety.validateAction(item.requestedBy, { type: "OPEN_INVENTORY" }, { dryRun: true });
+
+        const miningWord = mining.allowed ? "allowed" : "blocked";
+        const combatWord = combat.allowed ? "allowed" : "blocked";
+        const buildingWord = building.allowed ? "allowed" : "blocked";
+        const inventoryWord = inventory.allowed ? "allowed" : "blocked";
+
+        const result =
+          miningWord === "blocked" &&
+          combatWord === "blocked" &&
+          buildingWord === "blocked" &&
+          inventoryWord === "blocked"
+            ? "Safety test: mining blocked, combat blocked, building blocked, inventory blocked."
+            : `Safety test: mining ${miningWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}.`;
+
+        logger.log("safety", "Safety test results", {
+          mining,
+          combat,
+          building,
+          inventory
+        });
+        chat.send(result, "safety-test");
+        return true;
+      }
+
       default: {
-        const unknownType = action satisfies never;
-        logger.warn("action", `Unhandled action type: ${String(unknownType)}`);
+        if (SCAFFOLDED_CAPABILITY_ACTIONS.has(action.type)) {
+          logger.warn("action", `Capability action scaffold invoked but not implemented: ${action.type}`);
+          chat.send(`${action.type} is scaffolded but not implemented yet.`, "capability-scaffold");
+          return false;
+        }
+
+        logger.warn("action", `Unhandled action type: ${String((action as BotAction).type)}`);
         return false;
       }
     }
@@ -362,6 +551,7 @@ export function createActionController(
   return {
     queueAction,
     clearActionQueue,
+    clearMovementActions,
     getActionQueueSummary
   };
 }
