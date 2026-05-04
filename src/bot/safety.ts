@@ -11,6 +11,14 @@ const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
 const EQUIP_ACTIONS = new Set<BotAction["type"]>(["EQUIP_ITEM"]);
 const FLEE_ACTIONS = new Set<BotAction["type"]>(["FLEE_DANGER"]);
 const WANDER_ACTIONS = new Set<BotAction["type"]>(["WANDER_SAFE"]);
+const WANDER_BLOCKED_ACTIONS = new Set<BotAction["type"]>([
+  "MINE_BLOCK",
+  "HARVEST_BLOCK",
+  "ATTACK_ENTITY",
+  "PLACE_BLOCK",
+  "OPEN_INVENTORY",
+  "CRAFT_ITEM"
+]);
 
 export function createSafetyLayer(config: AppConfig, state: StateStore, logger: Logger): SafetyLayer {
   const actionTimestamps: number[] = [];
@@ -180,14 +188,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Only owner can run wandering actions.", requestor, action);
     }
 
-    if (
-      state.state.movement.mode === "wander" &&
-      ((action.type === "MINE_BLOCK" && !config.wanderAllowMining) ||
-        (action.type === "HARVEST_BLOCK" && !config.wanderAllowHarvest) ||
-        (action.type === "ATTACK_ENTITY" && !config.wanderAllowCombat) ||
-        (action.type === "PLACE_BLOCK" && !config.wanderAllowBuilding) ||
-        (action.type === "OPEN_INVENTORY" && !config.wanderAllowContainers))
-    ) {
+    if (state.state.movement.mode === "wander" && WANDER_BLOCKED_ACTIONS.has(action.type)) {
       return reject("That action is blocked while wandering.", requestor, action);
     }
 

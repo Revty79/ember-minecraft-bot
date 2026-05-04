@@ -2,20 +2,25 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.9: survival polish, safer mining targeting, and controlled harvesting foundation**.
+This release is **v0.10.2: safe yard movement reliability polish**.
 
 - AI bridge remains optional and disabled by default.
 - No autonomous behavior loops are enabled.
 - Combat/building/containers/crafting remain locked by default.
 - Harvesting exists as single-command scaffolding behind safety flags.
+- Wandering is owner-commanded, radius-bound, and time-limited behind safety flags.
 
-## v0.9 Highlights
+## v0.10.2 Highlights
 
-- Cleaner `Ember vitals` formatting with rounded health/position values.
-- New `Ember target` preview using the same targeting path as front mining.
-- Improved mining refusal reasons for safer live debugging.
-- Enhanced `Ember ore report` with visible ore, mineable-now, and reason summary.
-- Controlled harvest foundation (`harvest front/grass/crop/stop/report`) with strict safety gates.
+- Added full wander env defaults in `.env.example`.
+- Improved wander target selection for flatter, safer yard movement.
+- Added configurable wander candidate attempts and flat-only mode:
+  - `WANDER_TARGET_ATTEMPTS`
+  - `WANDER_FLAT_ONLY`
+  - `WANDER_MAX_STUCK_RETRIES`
+- Improved wander stuck handling with one bounded retry before safe stop.
+- Enhanced `Ember yard check` diagnostics (flat mode, attempts, terrain blocks, safe-state hint).
+- Added `short_grass` to default harvest allowed blocks.
 
 ## Environment
 
@@ -83,8 +88,32 @@ BLOCK_TARGET_RAYCAST_DISTANCE=5
 
 HARVEST_MAX_DISTANCE=5
 HARVEST_TIMEOUT_MS=10000
-HARVEST_ALLOWED_BLOCKS=grass,fern,tall_grass,wheat,carrots,potatoes,beetroots,pumpkin,melon
+HARVEST_ALLOWED_BLOCKS=short_grass,grass,fern,tall_grass,wheat,carrots,potatoes,beetroots,pumpkin,melon
 HARVEST_FORBIDDEN_BLOCKS=chest,barrel,furnace,crafting_table,door,trapdoor,bedrock,water,lava,fire
+
+ALLOW_WANDER=false
+WANDER_OWNER_ONLY=true
+WANDER_CENTER_MODE=home
+WANDER_RADIUS=8
+WANDER_MAX_DURATION_MS=30000
+WANDER_STEP_RADIUS=4
+WANDER_PAUSE_MS=2000
+WANDER_MAX_STEPS=8
+WANDER_TARGET_ATTEMPTS=20
+WANDER_FLAT_ONLY=true
+WANDER_MAX_STUCK_RETRIES=1
+WANDER_STOP_ON_DANGER=true
+WANDER_STOP_ON_LOW_HEALTH=true
+WANDER_LOW_HEALTH_THRESHOLD=10
+WANDER_STOP_ON_LOW_FOOD=true
+WANDER_LOW_FOOD_THRESHOLD=8
+WANDER_ALLOW_MINING=false
+WANDER_ALLOW_HARVEST=false
+WANDER_ALLOW_COMBAT=false
+WANDER_ALLOW_BUILDING=false
+WANDER_ALLOW_CONTAINERS=false
+WANDER_REQUIRE_HOME=true
+WANDER_RESPECT_HOME_PROTECTION=true
 
 MIN_GOAL_REFRESH_DISTANCE=2
 FOLLOW_REPATH_INTERVAL_MS=1500
@@ -135,6 +164,11 @@ Owner-only:
 - `Ember harvest grass`
 - `Ember harvest crop`
 - `Ember harvest stop`
+- `Ember wander`
+- `Ember wander home`
+- `Ember wander stop`
+- `Ember yard status`
+- `Ember yard check`
 - `Ember block`
 - `Ember ores nearby`
 - `Ember obstacle`
@@ -170,6 +204,7 @@ Owner-only:
 - mining
 - harvesting
 - cropHarvesting
+- wandering
 - combat
 - building
 - crafting
@@ -194,6 +229,7 @@ Important notes:
 - No autonomous mining/harvesting loops.
 - Mining and harvesting remain explicit command actions.
 - Home protection still blocks risky mining near home.
+- While wandering, mining/harvesting/combat/building/container/crafting actions are blocked.
 
 ## Harvesting (v0.9)
 
@@ -218,6 +254,19 @@ Observation snapshot now includes:
 - visible and mineable ores
 - current target block summary
 - home protection and safety flags
+- yard state summary (home center/radius, inside-radius, safety summary, active/steps/stop-reason)
+
+## Yard Wandering (v0.10.2)
+
+- `Ember wander` and `Ember wander home` run safe, owner-commanded wandering around home.
+- Wandering is bounded by `WANDER_RADIUS`, `WANDER_MAX_DURATION_MS`, and `WANDER_MAX_STEPS`.
+- Flat-yard reliability controls:
+  - `WANDER_TARGET_ATTEMPTS`
+  - `WANDER_FLAT_ONLY`
+  - `WANDER_MAX_STUCK_RETRIES`
+- `Ember wander stop` and `Ember stop` both stop wandering immediately.
+- `Ember yard status` reports center/radius/distance/inside/active.
+- `Ember yard check` reports safety diagnostics for live testing.
 
 ## Docker
 
