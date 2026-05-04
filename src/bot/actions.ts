@@ -898,6 +898,12 @@ export function createActionController(
     health: "okay" | "low";
     food: "okay" | "low";
     terrain: "safe" | "unsafe" | "unknown";
+    flatOnly: boolean;
+    targetAttempts: number;
+    blockBelow: string;
+    blockAtFeet: string;
+    blockAtHead: string;
+    currentPositionSafe: boolean | null;
   } {
     const home = getHomeCenterSnapshot();
     const insideRadius = home ? movement.isInsideYardRadius() : null;
@@ -917,6 +923,23 @@ export function createActionController(
       obstacle.fluidFrontFeet !== null ||
       obstacle.fluidFrontStepDown !== null ||
       state.state.inLava === true;
+    const belowName = obstacle.blockBelow.name ?? "unknown";
+    const feetName = obstacle.blockAtFeet.name ?? "unknown";
+    const headName = obstacle.blockAtHead.name ?? "unknown";
+    const belowClass = perception.classifyBlock(obstacle.blockBelow.name);
+    const feetClass = perception.classifyBlock(obstacle.blockAtFeet.name);
+    const headClass = perception.classifyBlock(obstacle.blockAtHead.name);
+    const positionSafe =
+      !isFinitePosition(bot.entity?.position)
+        ? null
+        : !terrainUnsafe &&
+          (feetClass === "air" || feetClass === "passable") &&
+          (headClass === "air" || headClass === "passable") &&
+          (belowClass === "solid" ||
+            belowClass === "dirt" ||
+            belowClass === "stone" ||
+            belowClass === "log" ||
+            belowClass === "ore");
     const terrain =
       !isFinitePosition(bot.entity?.position) ? "unknown" : terrainUnsafe ? "unsafe" : "safe";
 
@@ -926,7 +949,13 @@ export function createActionController(
       danger: danger.proximity === "none" ? "none" : "nearby",
       health: healthLow ? "low" : "okay",
       food: foodLow ? "low" : "okay",
-      terrain
+      terrain,
+      flatOnly: config.wanderFlatOnly,
+      targetAttempts: config.wanderTargetAttempts,
+      blockBelow: belowName,
+      blockAtFeet: feetName,
+      blockAtHead: headName,
+      currentPositionSafe: positionSafe
     };
   }
 
@@ -1470,9 +1499,13 @@ export function createActionController(
         const yard = getYardCheckSummary();
         const homeText = yard.homeSet ? "yes" : "no";
         const insideText = yard.insideRadius === null ? "unknown" : yard.insideRadius ? "yes" : "no";
+        const currentSafeText =
+          yard.currentPositionSafe === null ? "unknown" : yard.currentPositionSafe ? "yes" : "no";
 
         chat.send(
-          `Yard check: home set=${homeText}, inside radius=${insideText}, danger=${yard.danger}, health=${yard.health}, food=${yard.food}, terrain=${yard.terrain}.`,
+          `Yard check: home set=${homeText}, inside radius=${insideText}, flatOnly=${String(
+            yard.flatOnly
+          )}, targetAttempts=${yard.targetAttempts}, danger=${yard.danger}, health=${yard.health}, food=${yard.food}, terrain=${yard.terrain}, currentSafe=${currentSafeText}, blocks=${yard.blockBelow}/${yard.blockAtFeet}/${yard.blockAtHead}.`,
           "yard-check"
         );
         return true;

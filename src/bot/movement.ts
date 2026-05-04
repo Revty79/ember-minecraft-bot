@@ -23,6 +23,8 @@ type GoalPoint = {
   radius: number;
 };
 
+type WanderGoalResult = "reached" | "stuck" | "timeout" | "cancelled";
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -93,6 +95,8 @@ export function createMovementController(
   let wanderStartedAt: string | null = null;
   let wanderEndsAt: string | null = null;
   let wanderLastStopReason: string | null = null;
+  let wanderStartedAtMs: number | null = null;
+  let wanderStuckRetriesUsed = 0;
 
   function syncWanderState(): void {
     state.setWanderState({
@@ -141,6 +145,8 @@ export function createMovementController(
       wanderMaxSteps = 0;
       wanderStartedAt = null;
       wanderEndsAt = null;
+      wanderStartedAtMs = null;
+      wanderStuckRetriesUsed = 0;
       syncWanderState();
       return;
     }
@@ -159,6 +165,8 @@ export function createMovementController(
       wanderMaxSteps = 0;
       wanderStartedAt = null;
       wanderEndsAt = null;
+      wanderStartedAtMs = null;
+      wanderStuckRetriesUsed = 0;
       syncWanderState();
     }
   }
@@ -764,45 +772,175 @@ export function createMovementController(
     return perception.classifyBlock(name);
   }
 
-  function isCandidateTerrainSafe(target: Vec3Snapshot): boolean {
-    const feet = bot.blockAt(new Vec3(target.x, target.y, target.z));
-    const head = bot.blockAt(new Vec3(target.x, target.y + 1, target.z));
-    const below = bot.blockAt(new Vec3(target.x, target.y - 1, target.z));
-    const below2 = bot.blockAt(new Vec3(target.x, target.y - 2, target.z));
+  const WANDER_CLUTTER_BLOCKS = new Set<string>([
+    "snow",
+    "short_grass",
+    "grass",
+    "tall_grass",
+    "fern",
+    "large_fern"
+  ]);
+
+  function hasNameFragment(name: string | null, fragment: string): boolean {
+    if (!name) return false;
+    return name.includes(fragment);
+  }
+
+  function isGroundClass(blockClass: string): boolean {
+    return blockClass === "solid" || blockClass === "dirt" || blockClass === "stone" || blockClass === "log" || blockClass === "ore";
+  }
+
+  function isPassableClass(blockClass: string): boolean {
+    return blockClass === "air" || blockClass === "passable";
+  }
+
+  function isStructuralObstacle(name: string | null): boolean {
+    if (!name) return false;
+    return (
+      hasNameFragment(name, "fence") ||
+      hasNameFragment(name, "wall") ||
+      hasNameFragment(name, "door") ||
+      hasNameFragment(name, "trapdoor") ||
+      hasNameFragment(name, "gate")
+    );
+  }
+
+  function isAwkwardFeetOrHead(name: string | null): boolean {
+    if (!name) return false;
+    if (WANDER_CLUTTER_BLOCKS.has(name)) return true;
+    return isStructuralObstacle(name);
+  }
+
+  function hasNearbyAwkwardObstacle(x: number, y: number, z: number): boolean {
+    const checks = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+
+    for (const [dx, dz] of checks) {
+      const feetName = bot.blockAt(new Vec3(x + dx, y, z + dz))?.name ?? null;
+      const headName = bot.blockAt(new Vec3(x + dx, y + 1, z + dz))?.name ?? null;
+      if (isStructuralObstacle(feetName) || isStructuralObstacle(headName)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function evaluateWanderColumn(
+    x: number,
+    y: number,
+    z: number
+  ): {
+    ok: boolean;
+    reason: string;
+    below: string | null;
+    feet: string | null;
+    head: string | null;
+  } {
+    const feet = bot.blockAt(new Vec3(x, y, z));
+    const head = bot.blockAt(new Vec3(x, y + 1, z));
+    const below = bot.blockAt(new Vec3(x, y - 1, z));
+    const below2 = bot.blockAt(new Vec3(x, y - 2, z));
 
     const feetName = feet?.name ?? null;
     const headName = head?.name ?? null;
     const belowName = below?.name ?? null;
     const below2Name = below2?.name ?? null;
 
+    const result = {
+      ok: false,
+      reason: "unknown",
+      below: belowName,
+      feet: feetName,
+      head: headName
+    };
+
+    if (!feet || !head || !below) {
+      result.reason = "missing block data";
+      return result;
+    }
+
     if (isFluidName(feetName) || isFluidName(headName) || isFluidName(belowName) || isFluidName(below2Name)) {
-      return false;
+      result.reason = "fluid nearby";
+      return result;
+    }
+
+    if (isAwkwardFeetOrHead(feetName) || isAwkwardFeetOrHead(headName)) {
+      result.reason = "awkward clutter";
+      return result;
     }
 
     const feetClass = classifyName(feetName);
     const headClass = classifyName(headName);
     const belowClass = classifyName(belowName);
-    const below2Class = classifyName(below2Name);
 
-    const feetPassable = feetClass === "air" || feetClass === "passable";
-    const headPassable = headClass === "air" || headClass === "passable";
-    const belowSolid =
-      belowClass === "solid" ||
-      belowClass === "dirt" ||
-      belowClass === "stone" ||
-      belowClass === "log" ||
-      belowClass === "ore";
-    const below2DropUnsafe = below2Class === "air" || below2Class === "passable" || below2Class === "fluid";
-
-    if (!feetPassable || !headPassable || !belowSolid) {
-      return false;
+    if (!isPassableClass(feetClass)) {
+      result.reason = "feet not passable";
+      return result;
     }
 
-    if (below2DropUnsafe && belowClass !== "solid" && belowClass !== "dirt" && belowClass !== "stone") {
-      return false;
+    if (!isPassableClass(headClass)) {
+      result.reason = "head not passable";
+      return result;
     }
 
-    return true;
+    if (!isGroundClass(belowClass)) {
+      result.reason = "no solid ground";
+      return result;
+    }
+
+    if (hasNearbyAwkwardObstacle(x, y, z)) {
+      result.reason = "adjacent fence/wall/door";
+      return result;
+    }
+
+    if (config.wanderFlatOnly) {
+      const checks = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1]
+      ];
+
+      for (const [dx, dz] of checks) {
+        const neighborBelow = bot.blockAt(new Vec3(x + dx, y - 1, z + dz));
+        const neighborBelowName = neighborBelow?.name ?? null;
+        const neighborBelowClass = classifyName(neighborBelowName);
+        if (!isGroundClass(neighborBelowClass)) {
+          result.reason = "edge/drop nearby";
+          return result;
+        }
+      }
+    }
+
+    result.ok = true;
+    result.reason = "ok";
+    return result;
+  }
+
+  function evaluateRouteFlatSafety(from: Vec3Snapshot, to: Vec3Snapshot): { ok: boolean; reason: string } {
+    if (!config.wanderFlatOnly) {
+      return { ok: true, reason: "ok" };
+    }
+
+    const steps = Math.max(Math.abs(Math.round(to.x - from.x)), Math.abs(Math.round(to.z - from.z)));
+    const sampleSteps = Math.max(steps, 1);
+    for (let i = 1; i <= sampleSteps; i += 1) {
+      const t = i / sampleSteps;
+      const sampleX = Math.round(from.x + (to.x - from.x) * t);
+      const sampleY = Math.round(to.y);
+      const sampleZ = Math.round(from.z + (to.z - from.z) * t);
+      const sample = evaluateWanderColumn(sampleX, sampleY, sampleZ);
+      if (!sample.ok) {
+        return { ok: false, reason: `route ${sample.reason}` };
+      }
+    }
+
+    return { ok: true, reason: "ok" };
   }
 
   function pickRandomWanderTarget(center: Vec3Snapshot): GoalPoint | null {
@@ -811,30 +949,59 @@ export function createMovementController(
     }
 
     const current = toSnapshot(bot.entity.position);
-    const attempts = 28;
+    const attempts = Math.max(1, config.wanderTargetAttempts);
+    const targetY = config.wanderFlatOnly ? Math.round(current.y) : Math.round(center.y);
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const dx = (Math.random() * 2 - 1) * config.wanderStepRadius;
       const dz = (Math.random() * 2 - 1) * config.wanderStepRadius;
       const candidate: Vec3Snapshot = {
         x: Math.round(current.x + dx),
-        y: Math.round(current.y),
+        y: targetY,
         z: Math.round(current.z + dz)
       };
 
       const fromCenter = computeDistance(candidate, center);
       if (fromCenter > config.wanderRadius) {
+        logger.log("move", `wander candidate rejected reason=outside-yard-radius pos=(${candidate.x},${candidate.y},${candidate.z})`);
         continue;
       }
 
       const moveDistance = computeDistance(candidate, current);
       if (moveDistance < 1) {
+        logger.log("move", `wander candidate rejected reason=too-close pos=(${candidate.x},${candidate.y},${candidate.z})`);
         continue;
       }
 
-      if (!isCandidateTerrainSafe(candidate)) {
+      if (config.wanderFlatOnly && Math.round(candidate.y) !== Math.round(current.y)) {
+        logger.log("move", `wander candidate rejected reason=not-flat pos=(${candidate.x},${candidate.y},${candidate.z})`);
         continue;
       }
+
+      const safety = evaluateWanderColumn(candidate.x, candidate.y, candidate.z);
+      if (!safety.ok) {
+        logger.log(
+          "move",
+          `wander candidate rejected reason=${safety.reason} pos=(${candidate.x},${candidate.y},${candidate.z})`
+        );
+        continue;
+      }
+
+      const routeSafety = evaluateRouteFlatSafety(current, candidate);
+      if (!routeSafety.ok) {
+        logger.log(
+          "move",
+          `wander candidate rejected reason=${routeSafety.reason} pos=(${candidate.x},${candidate.y},${candidate.z})`
+        );
+        continue;
+      }
+
+      logger.log(
+        "move",
+        `wander candidate accepted pos=(${candidate.x},${candidate.y},${candidate.z}) ground=${safety.below ?? "unknown"} feet=${
+          safety.feet ?? "unknown"
+        } head=${safety.head ?? "unknown"}`
+      );
 
       return {
         x: candidate.x,
@@ -885,13 +1052,16 @@ export function createMovementController(
     return null;
   }
 
-  async function moveToWanderGoal(goal: GoalPoint, sessionId: number): Promise<"reached" | "stuck" | "timeout" | "cancelled"> {
+  async function moveToWanderGoal(goal: GoalPoint, sessionId: number): Promise<WanderGoalResult> {
     return new Promise((resolve) => {
       let finished = false;
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       let cancelCheckHandle: ReturnType<typeof setInterval> | null = null;
+      let ignoredStuckReset = false;
+      const startPosition =
+        isFinitePosition(bot.entity?.position) && bot.entity ? toSnapshot(bot.entity.position) : null;
 
-      const finish = (result: "reached" | "stuck" | "timeout" | "cancelled"): void => {
+      const finish = (result: WanderGoalResult): void => {
         if (finished) return;
         finished = true;
         bot.removeListener("goal_reached", onGoalReachedLocal);
@@ -906,9 +1076,44 @@ export function createMovementController(
       };
 
       const onPathResetLocal = (reason: unknown): void => {
-        if (String(reason) === "stuck") {
-          finish("stuck");
+        if (String(reason) !== "stuck") {
+          return;
         }
+
+        const currentPosition =
+          isFinitePosition(bot.entity?.position) && bot.entity ? toSnapshot(bot.entity.position) : null;
+        const distanceToGoal =
+          currentPosition === null
+            ? null
+            : computeDistance(currentPosition, {
+                x: goal.x,
+                y: goal.y,
+                z: goal.z
+              });
+        const movedDistance =
+          currentPosition && startPosition ? computeDistance(currentPosition, startPosition) : 0;
+
+        if (distanceToGoal !== null && distanceToGoal <= goal.radius + 1) {
+          logger.log(
+            "move",
+            `wander stuck-reset treated as reached dist=${distanceToGoal.toFixed(2)} moved=${movedDistance.toFixed(2)}`
+          );
+          finish("reached");
+          return;
+        }
+
+        if (!ignoredStuckReset && movedDistance >= config.minProgressDistance) {
+          ignoredStuckReset = true;
+          logger.warn(
+            "pathfinder",
+            `wander path_reset:stuck ignored once progress=${movedDistance.toFixed(2)} dist=${
+              distanceToGoal === null ? "unknown" : distanceToGoal.toFixed(2)
+            }`
+          );
+          return;
+        }
+
+        finish("stuck");
       };
 
       bot.on("goal_reached", onGoalReachedLocal);
@@ -930,6 +1135,12 @@ export function createMovementController(
   }
 
   function stopWander(reason: string): void {
+    const durationMs = wanderStartedAtMs === null ? 0 : Math.max(0, Date.now() - wanderStartedAtMs);
+    const level: "log" | "warn" = reason === "completed" ? "log" : "warn";
+    logger[level](
+      "move",
+      `wander stopped reason=${reason} steps=${wanderSteps}/${wanderMaxSteps} durationMs=${durationMs}`
+    );
     wanderStopRequested = true;
     wanderLastStopReason = reason;
     clearMovementState(`wander-stop:${reason}`);
@@ -993,7 +1204,9 @@ export function createMovementController(
     wanderActive = true;
     wanderSteps = 0;
     wanderMaxSteps = config.wanderMaxSteps;
+    wanderStuckRetriesUsed = 0;
     wanderStartedAt = nowIso();
+    wanderStartedAtMs = Date.now();
     wanderEndsAt = new Date(Date.now() + config.wanderMaxDurationMs).toISOString();
     wanderLastStopReason = null;
     updateMovementState("wander");
@@ -1034,6 +1247,15 @@ export function createMovementController(
 
       const result = await moveToWanderGoal(target, sessionId);
       if (result === "stuck") {
+        if (wanderStuckRetriesUsed < config.wanderMaxStuckRetries) {
+          wanderStuckRetriesUsed += 1;
+          logger.warn(
+            "move",
+            `wander stuck; retrying with a new target (${wanderStuckRetriesUsed}/${config.wanderMaxStuckRetries})`
+          );
+          continue;
+        }
+
         wanderLastStopReason = "stuck";
         stopWander("stuck");
         chat.send("I got stuck and stopped wandering.", "wander-stuck");
@@ -1224,6 +1446,10 @@ export function createMovementController(
 
   function onPathReset(reason: string): void {
     state.setMovementPathResetReason(reason);
+    if (movementMode === "wander") {
+      logger.log("pathfinder", `wander path_reset: reason=${reason}`);
+      return;
+    }
     if (reason === "stuck") {
       handleStuck("path_reset:stuck");
     }
@@ -1253,6 +1479,14 @@ export function createMovementController(
 
   function onPhysicsTick(): void {
     if (movementMode !== "idle" && isFinitePosition(bot.entity?.position)) {
+      const pathfinderMoving =
+        (bot.pathfinder as unknown as { isMoving?: () => boolean }).isMoving?.() ?? false;
+      if (movementMode === "wander" && !pathfinderMoving) {
+        progressAnchor = toSnapshot(bot.entity.position);
+        lastProgressCheckAt = Date.now();
+        state.setMovementLastProgressAt(nowIso());
+      }
+
       const now = Date.now();
       const currentPosition = toSnapshot(bot.entity.position);
 
@@ -1260,7 +1494,7 @@ export function createMovementController(
         progressAnchor = currentPosition;
         lastProgressCheckAt = now;
         state.setMovementLastProgressAt(nowIso());
-      } else if (now - lastProgressCheckAt >= config.movementProgressCheckMs) {
+      } else if (now - lastProgressCheckAt >= config.movementProgressCheckMs && !(movementMode === "wander" && !pathfinderMoving)) {
         const movedDistance = computeDistance(progressAnchor, currentPosition);
         lastProgressCheckAt = now;
         progressAnchor = currentPosition;

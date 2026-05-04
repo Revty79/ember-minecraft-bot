@@ -76,6 +76,9 @@ export interface AppConfig {
   wanderStepRadius: number;
   wanderPauseMs: number;
   wanderMaxSteps: number;
+  wanderTargetAttempts: number;
+  wanderFlatOnly: boolean;
+  wanderMaxStuckRetries: number;
   wanderStopOnDanger: boolean;
   wanderStopOnLowHealth: boolean;
   wanderLowHealthThreshold: number;
@@ -250,6 +253,7 @@ export function loadConfig(): AppConfig {
   const harvestMaxDistance = readNumber("HARVEST_MAX_DISTANCE", 5, 1);
   const harvestTimeoutMs = readInteger("HARVEST_TIMEOUT_MS", 10000, 1000);
   const harvestAllowedBlocks = readCsvList("HARVEST_ALLOWED_BLOCKS", [
+    "short_grass",
     "grass",
     "fern",
     "tall_grass",
@@ -279,6 +283,9 @@ export function loadConfig(): AppConfig {
   const wanderStepRadius = readNumber("WANDER_STEP_RADIUS", 4, 1);
   const wanderPauseMs = readInteger("WANDER_PAUSE_MS", 2000, 0);
   const wanderMaxSteps = readInteger("WANDER_MAX_STEPS", 8, 1);
+  const wanderTargetAttempts = readInteger("WANDER_TARGET_ATTEMPTS", 20, 1);
+  const wanderFlatOnly = readBoolean("WANDER_FLAT_ONLY", true);
+  const wanderMaxStuckRetries = readInteger("WANDER_MAX_STUCK_RETRIES", 1, 0);
   const wanderStopOnDanger = readBoolean("WANDER_STOP_ON_DANGER", true);
   const wanderStopOnLowHealth = readBoolean("WANDER_STOP_ON_LOW_HEALTH", true);
   const wanderLowHealthThreshold = readNumber("WANDER_LOW_HEALTH_THRESHOLD", 10, 1);
@@ -383,6 +390,9 @@ export function loadConfig(): AppConfig {
     wanderStepRadius,
     wanderPauseMs,
     wanderMaxSteps,
+    wanderTargetAttempts,
+    wanderFlatOnly,
+    wanderMaxStuckRetries,
     wanderStopOnDanger,
     wanderStopOnLowHealth,
     wanderLowHealthThreshold,

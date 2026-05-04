@@ -108,6 +108,7 @@ function asBotAction(value: unknown): BotAction | null {
 
     case "OPEN_INVENTORY":
     case "STOP_HARVEST":
+    case "STOP_WANDER":
     case "STOP_MOVING":
     case "STOP_MINING":
     case "RESPAWN":
@@ -143,6 +144,8 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_ORES_NEARBY":
     case "REPORT_ORE_REPORT":
     case "REPORT_HARVEST_REPORT":
+    case "REPORT_YARD_STATUS":
+    case "REPORT_YARD_CHECK":
     case "REPORT_HOME_STATUS":
     case "REPORT_SAFETY_TEST": {
       return {
@@ -206,6 +209,13 @@ function round1(value: number | null | undefined): number | null {
   return Number(value.toFixed(1));
 }
 
+function computeDistance(a: Vec3Snapshot, b: Vec3Snapshot): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 function targetBlockSummary(
   bot: Bot,
   perception: PerceptionController,
@@ -267,6 +277,26 @@ export function createAiBridgeController(
           z: Number(snapshot.position.z.toFixed(1))
         }
       : null;
+    const homePosition: Vec3Snapshot | null = state.state.homeRecord
+      ? {
+          x: state.state.homeRecord.x,
+          y: state.state.homeRecord.y,
+          z: state.state.homeRecord.z
+        }
+      : state.state.homePosition
+        ? { ...state.state.homePosition }
+        : null;
+    const distanceFromHome =
+      roundedPosition && homePosition ? round1(computeDistance(roundedPosition, homePosition)) : null;
+    const insideRadius = distanceFromHome === null ? null : distanceFromHome <= config.wanderRadius;
+    const obstacle = perception.getImmediateObstacles();
+    const terrainUnsafe =
+      obstacle.fluidAtFeet !== null ||
+      obstacle.fluidFrontFeet !== null ||
+      obstacle.fluidFrontStepDown !== null ||
+      snapshot.inLava === true;
+    const terrain: "safe" | "unsafe" | "unknown" =
+      roundedPosition === null ? "unknown" : terrainUnsafe ? "unsafe" : "safe";
 
     return {
       timestamp: new Date().toISOString(),
@@ -308,6 +338,37 @@ export function createAiBridgeController(
         homeProtection: {
           enabled: config.homeProtectionRadius > 0,
           homeSet: Boolean(state.state.homeRecord || state.state.homePosition)
+        },
+        yard: {
+          enabled: config.allowWander,
+          centerMode: config.wanderCenterMode,
+          radius: config.wanderRadius,
+          homePosition,
+          distanceFromHome,
+          insideRadius,
+          safety: {
+            homeSet: Boolean(homePosition),
+            insideRadius: Boolean(insideRadius),
+            danger: snapshot.dangerSummary.proximity === "none" ? "none" : "nearby",
+            health:
+              snapshot.health !== null &&
+              Number.isFinite(snapshot.health) &&
+              snapshot.health <= config.wanderLowHealthThreshold
+                ? "low"
+                : "okay",
+            food:
+              snapshot.food !== null &&
+              Number.isFinite(snapshot.food) &&
+              snapshot.food <= config.wanderLowFoodThreshold
+                ? "low"
+                : "okay",
+            terrain
+          },
+          active: state.state.movement.wanderActive,
+          steps: state.state.movement.wanderSteps,
+          maxSteps: state.state.movement.wanderMaxSteps,
+          endsAt: state.state.movement.wanderEndsAt,
+          lastStopReason: state.state.movement.wanderLastStopReason
         },
         safetyFlags: { ...snapshot.safetyFlags }
       },
