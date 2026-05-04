@@ -18,6 +18,8 @@ export interface AppConfig {
   allowCombat: boolean;
   allowBuilding: boolean;
   allowInventory: boolean;
+  allowEating: boolean;
+  allowFlee: boolean;
   profilesFolder: string;
 
   maxComeDistance: number;
@@ -40,6 +42,10 @@ export interface AppConfig {
   invalidPositionRecoveryMs: number;
   stateLogOnlyOnChange: boolean;
   homeFilePath: string;
+  fleeDistance: number;
+  fleeHomeRadius: number;
+  fleeToHome: boolean;
+  fleeToOwner: boolean;
 
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
@@ -121,6 +127,8 @@ export function loadConfig(): AppConfig {
   const allowCombat = readBoolean("ALLOW_COMBAT", false);
   const allowBuilding = readBoolean("ALLOW_BUILDING", false);
   const allowInventory = readBoolean("ALLOW_INVENTORY", false);
+  const allowEating = readBoolean("ALLOW_EATING", false);
+  const allowFlee = readBoolean("ALLOW_FLEE", true);
 
   const maxComeDistance = readNumber("MAX_COME_DISTANCE", 40, 1);
   const maxFollowStartDistance = readNumber("MAX_FOLLOW_START_DISTANCE", 40, 1);
@@ -142,6 +150,10 @@ export function loadConfig(): AppConfig {
   const invalidPositionRecoveryMs = readInteger("INVALID_POSITION_RECOVERY_MS", 5000, 1000);
   const stateLogOnlyOnChange = readBoolean("STATE_LOG_ONLY_ON_CHANGE", true);
   const homeFilePath = path.resolve(process.cwd(), readEnv("HOME_FILE_PATH", "./data/home.json"));
+  const fleeDistance = readNumber("FLEE_DISTANCE", 12, 1);
+  const fleeHomeRadius = readNumber("FLEE_HOME_RADIUS", 6, 1);
+  const fleeToHome = readBoolean("FLEE_TO_HOME", true);
+  const fleeToOwner = readBoolean("FLEE_TO_OWNER", true);
 
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
@@ -179,6 +191,8 @@ export function loadConfig(): AppConfig {
     allowCombat,
     allowBuilding,
     allowInventory,
+    allowEating,
+    allowFlee,
     profilesFolder: path.resolve(process.cwd(), "data"),
     maxComeDistance,
     maxFollowStartDistance,
@@ -198,6 +212,10 @@ export function loadConfig(): AppConfig {
     invalidPositionRecoveryMs,
     stateLogOnlyOnChange,
     homeFilePath,
+    fleeDistance,
+    fleeHomeRadius,
+    fleeToHome,
+    fleeToOwner,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

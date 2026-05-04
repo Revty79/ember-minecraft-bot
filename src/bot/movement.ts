@@ -72,6 +72,7 @@ export function createMovementController(
   let followTarget: string | null = null;
   let activeComeGoal: GoalPoint | null = null;
   let activeHomeGoal: GoalPoint | null = null;
+  let activeFleeGoal: GoalPoint | null = null;
   let movementTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let respawnTimerActive = false;
   let lastRespawnRequestAt = 0;
@@ -82,6 +83,7 @@ export function createMovementController(
 
   let progressAnchor: Vec3Snapshot | null = null;
   let lastProgressCheckAt = 0;
+  let stayHomeEnabled = false;
 
   function getMode(): MovementMode {
     return movementMode;
@@ -106,6 +108,7 @@ export function createMovementController(
       state.setFollowTarget(null);
       activeComeGoal = null;
       activeHomeGoal = null;
+      activeFleeGoal = null;
       followTarget = null;
       progressAnchor = null;
       lastProgressCheckAt = 0;
@@ -142,6 +145,12 @@ export function createMovementController(
       return `HomeGoal(${activeHomeGoal.x.toFixed(1)}, ${activeHomeGoal.y.toFixed(
         1
       )}, ${activeHomeGoal.z.toFixed(1)}, r=${activeHomeGoal.radius.toFixed(1)})`;
+    }
+
+    if (movementMode === "flee" && activeFleeGoal) {
+      return `FleeGoal(${activeFleeGoal.x.toFixed(1)}, ${activeFleeGoal.y.toFixed(
+        1
+      )}, ${activeFleeGoal.z.toFixed(1)}, r=${activeFleeGoal.radius.toFixed(1)})`;
     }
 
     if (movementMode === "follow") {
@@ -245,7 +254,7 @@ export function createMovementController(
     }, config.respawnDelayMs);
   }
 
-  function startMovementTimeout(mode: "come" | "home"): void {
+  function startMovementTimeout(mode: "come" | "home" | "flee"): void {
     if (movementTimeoutHandle) {
       clearTimeout(movementTimeoutHandle);
     }
@@ -265,6 +274,8 @@ export function createMovementController(
       clearMovementState(`${mode}-timeout`);
       if (mode === "home") {
         chat.send("I couldn't reach home safely.", "home-timeout", { bypassRateLimit: true });
+      } else if (mode === "flee") {
+        chat.send("I couldn't reach a safer spot.", "flee-timeout", { bypassRateLimit: true });
       } else {
         chat.send("I couldn't reach you safely.", "come-timeout", { bypassRateLimit: true });
       }
@@ -527,7 +538,7 @@ export function createMovementController(
   }
 
   function goHome(requestor: string): boolean {
-    if (!safety.isOwner(requestor)) {
+    if (!safety.isOwner(requestor) && !safety.isPrivilegedRequester(requestor)) {
       chat.send(`Only ${config.ownerUsername} can issue movement commands.`, "home-denied");
       return false;
     }
@@ -591,7 +602,152 @@ export function createMovementController(
     return true;
   }
 
+  function setStayHome(requestor: string): boolean {
+    if (!safety.isOwner(requestor) && !safety.isPrivilegedRequester(requestor)) {
+      chat.send(`Only ${config.ownerUsername} can issue movement commands.`, "stay-home-denied");
+      return false;
+    }
+
+    const record = state.state.homeRecord;
+    const home = record ? { x: record.x, y: record.y, z: record.z } : state.state.homePosition;
+    if (!home) {
+      chat.send("Home is not set yet.", "stay-home-missing-home");
+      return false;
+    }
+
+    stayHomeEnabled = true;
+    state.setCurrentGoal("Stay near home");
+    state.addEvent("state_update", "Stay-home mode enabled", {
+      enabledBy: requestor
+    });
+    logger.log("move", `stay-home enabled by ${requestor}`);
+    chat.send("Stay-home mode enabled.", "stay-home-enabled");
+
+    if (movementMode === "idle" && isFinitePosition(bot.entity?.position)) {
+      const botPos = toSnapshot(bot.entity.position);
+      const homeDistance = computeDistance(botPos, home);
+      if (homeDistance > config.fleeHomeRadius) {
+        void Promise.resolve().then(() => goHome("SYSTEM"));
+      }
+    }
+
+    return true;
+  }
+
+  function resolveFleeGoal(): GoalPoint | null {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return null;
+    }
+
+    const botPos = toSnapshot(bot.entity.position);
+    if (config.fleeToHome) {
+      const homeRecord = state.state.homeRecord;
+      const home = homeRecord
+        ? { x: homeRecord.x, y: homeRecord.y, z: homeRecord.z }
+        : state.state.homePosition;
+
+      if (home) {
+        const homeDistance = computeDistance(botPos, home);
+        if (homeDistance <= config.fleeDistance) {
+          return {
+            x: home.x,
+            y: home.y,
+            z: home.z,
+            radius: config.fleeHomeRadius
+          };
+        }
+      }
+    }
+
+    if (config.fleeToOwner) {
+      const ownerEntity = getPlayerEntityByUsername(config.ownerUsername);
+      if (ownerEntity && isFinitePosition(ownerEntity.position)) {
+        const ownerDistance = bot.entity.position.distanceTo(ownerEntity.position);
+        if (ownerDistance <= config.fleeDistance) {
+          return {
+            x: ownerEntity.position.x,
+            y: ownerEntity.position.y,
+            z: ownerEntity.position.z,
+            radius: Math.max(config.followDistance, 2)
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function startFleeFromDanger(requestor: string): boolean {
+    const allowChatReply = requestor !== "SYSTEM" && requestor !== "AI";
+
+    if (!safety.isOwner(requestor) && !safety.isPrivilegedRequester(requestor)) {
+      chat.send(`Only ${config.ownerUsername} can issue movement commands.`, "flee-denied");
+      return false;
+    }
+
+    if (movementMode !== "idle") {
+      clearMovementState("switch-to-flee");
+    }
+
+    const readiness = getBotPositionReadiness();
+    if (!readiness.ready) {
+      logger.warn("move", `blocked: ${readiness.reason}`);
+      if (allowChatReply) {
+        chat.send("I respawned, but I am not ready to move yet.", "flee-not-ready");
+      }
+      return false;
+    }
+
+    const fleeGoal = resolveFleeGoal();
+    if (!fleeGoal) {
+      logger.warn("survival", "No safe flee goal available. Stopping movement.");
+      clearMovementState("flee-no-target");
+      if (allowChatReply) {
+        chat.send("Danger close. I am stopping.", "flee-no-target");
+      }
+      return false;
+    }
+
+    if (!isFinitePosition(bot.entity?.position)) {
+      if (allowChatReply) {
+        chat.send("I am not ready to flee yet.", "flee-no-position");
+      }
+      return false;
+    }
+
+    const distance = computeDistance(toSnapshot(bot.entity.position), {
+      x: fleeGoal.x,
+      y: fleeGoal.y,
+      z: fleeGoal.z
+    });
+    updateMovementState("flee");
+    activeFleeGoal = fleeGoal;
+    state.setCurrentGoal("Flee danger");
+    state.setMovementGoal(
+      `GoalNear(${fleeGoal.x.toFixed(1)}, ${fleeGoal.y.toFixed(1)}, ${fleeGoal.z.toFixed(1)}, ${fleeGoal.radius})`
+    );
+
+    logger.warn(
+      "survival",
+      `flee start target=(${fleeGoal.x.toFixed(1)}, ${fleeGoal.y.toFixed(1)}, ${fleeGoal.z.toFixed(
+        1
+      )}) radius=${fleeGoal.radius} distance=${distance.toFixed(2)}`
+    );
+    bot.pathfinder.setGoal(new goals.GoalNear(fleeGoal.x, fleeGoal.y, fleeGoal.z, fleeGoal.radius), false);
+    startMovementTimeout("flee");
+    if (allowChatReply) {
+      chat.send("Fleeing to a safer spot.", "flee-started");
+    }
+    return true;
+  }
+
   function stop(reason: string): void {
+    if (reason.includes("stop command")) {
+      stayHomeEnabled = false;
+      state.addEvent("state_update", "Stay-home mode disabled", {
+        reason
+      });
+    }
     clearMovementState(reason);
   }
 
@@ -689,6 +845,12 @@ export function createMovementController(
     if (movementMode === "home") {
       clearMovementState("home-goal-reached");
       chat.send("Reached home.", "home-reached", { bypassRateLimit: true });
+      return;
+    }
+
+    if (movementMode === "flee") {
+      clearMovementState("flee-goal-reached");
+      chat.send("Reached a safer spot.", "flee-reached", { bypassRateLimit: true });
     }
   }
 
@@ -716,6 +878,31 @@ export function createMovementController(
         } else {
           state.setMovementNoProgressCount(0);
           state.setMovementStuckCount(0);
+        }
+      }
+    }
+
+    if (stayHomeEnabled && movementMode === "idle" && isFinitePosition(bot.entity?.position)) {
+      const homeRecord = state.state.homeRecord;
+      const home = homeRecord
+        ? { x: homeRecord.x, y: homeRecord.y, z: homeRecord.z }
+        : state.state.homePosition;
+
+      if (home) {
+        const danger = state.state.dangerSummary;
+        if (
+          config.stopOnDanger &&
+          danger.nearestHostileDistance !== null &&
+          danger.nearestHostileDistance <= config.hostileStopRadius
+        ) {
+          return;
+        }
+
+        const botPos = toSnapshot(bot.entity.position);
+        const distanceHome = computeDistance(botPos, home);
+        if (distanceHome > config.fleeHomeRadius) {
+          logger.log("move", `stay-home drift detected distance=${distanceHome.toFixed(2)}. Returning home.`);
+          goHome("SYSTEM");
         }
       }
     }
@@ -772,6 +959,8 @@ export function createMovementController(
     setHome,
     clearHome,
     goHome,
+    setStayHome,
+    startFleeFromDanger,
     stop,
     stopForDanger,
     tryRespawn,
@@ -785,6 +974,7 @@ export function createMovementController(
     getCurrentGoalDescription,
     getMode,
     isMoving,
+    isStayHomeEnabled: () => stayHomeEnabled,
     isEntityPositionHealthy: () => isEntityPositionHealthy(bot)
   };
 }

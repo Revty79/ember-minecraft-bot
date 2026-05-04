@@ -26,6 +26,14 @@ function isBotAlive(bot: Bot): boolean {
   return runtime.isAlive ?? bot.health > 0;
 }
 
+function hungerStatusFromFood(food: number | null): "full" | "okay" | "hungry" | "starving" {
+  if (food === null) return "okay";
+  if (food >= 19) return "full";
+  if (food >= 13) return "okay";
+  if (food >= 7) return "hungry";
+  return "starving";
+}
+
 export function createLifecycleController(
   bot: Bot,
   config: AppConfig,
@@ -258,6 +266,7 @@ export function createLifecycleController(
       state.setHealthAndFood(health, food);
       state.setVitalsDetails({
         saturation: saturationRaw,
+        hungerStatus: hungerStatusFromFood(food),
         oxygen,
         onFire: typeof entityRuntime?.isOnFire === "boolean" ? entityRuntime.isOnFire : null,
         inLava: typeof entityRuntime?.isInLava === "boolean" ? entityRuntime.isInLava : null,

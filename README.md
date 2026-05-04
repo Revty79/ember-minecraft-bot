@@ -1,27 +1,23 @@
-﻿# ember-minecraft-bot
+# ember-minecraft-bot
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.6.1: stability polish**.
+This release is **v0.7: survival foundation + inventory awareness scaffolding**.
 
-- Fixes `entity.mobType` deprecation log spam.
-- Adds invalid-live-position recovery path.
-- Improves not-ready chat throttling and chat-validation safety behavior.
-- Persists home location to `./data/home.json`.
-- Reduces repeated state log noise.
+- AI bridge remains optional/stubbed and is disabled by default.
+- Mining/combat/building/container usage remain locked by default.
+- Adds inventory read summaries, food/hunger awareness, flee scaffolding, stay-home mode, and block/ore perception commands.
 
-## v0.6.1 Stability Fixes
+## v0.7 Highlights
 
-- Hostile detection no longer touches deprecated `entity.mobType`; uses `displayName/name/type` fallback chain.
-- Invalid alive position handling:
-  - detects non-finite bot position while alive
-  - stops movement and clears queue
-  - attempts short soft recovery
-  - cleanly quits so Docker can restart if still invalid
-- `Ember recover` now handles dead, invalid-position, and safe-reset recovery flows.
-- Not-ready chat cooldown added to reduce repeated messages.
-- Home now persists across respawn/restart in `HOME_FILE_PATH`.
-- State summary logging can be change-only with periodic heartbeat.
+- New read-only inventory summary command.
+- Food detection helper with known-food names plus registry-based food metadata fallback.
+- `EAT_FOOD` action scaffold is safety-gated by `ALLOW_EATING`.
+- Hunger/vitals now include hunger status (`full/okay/hungry/starving`).
+- Danger summary now includes proximity levels: `none/far/medium/close/critical`.
+- Optional flee behavior and manual `Ember flee` command.
+- Home/stay-home polish with persisted home at `HOME_FILE_PATH`.
+- New block/ore perception command surfaces for future mining planning (scan-only, no mining).
 
 ## Environment
 
@@ -47,6 +43,8 @@ ALLOW_MINING=false
 ALLOW_COMBAT=false
 ALLOW_BUILDING=false
 ALLOW_INVENTORY=false
+ALLOW_EATING=false
+ALLOW_FLEE=true
 
 MAX_COME_DISTANCE=40
 MAX_FOLLOW_START_DISTANCE=40
@@ -59,6 +57,10 @@ DANGER_SCAN_INTERVAL_MS=3000
 HOSTILE_DANGER_RADIUS=10
 HOSTILE_STOP_RADIUS=4
 STOP_ON_DANGER=true
+FLEE_DISTANCE=12
+FLEE_HOME_RADIUS=6
+FLEE_TO_HOME=true
+FLEE_TO_OWNER=true
 
 MIN_GOAL_REFRESH_DISTANCE=2
 FOLLOW_REPATH_INTERVAL_MS=1500
@@ -77,42 +79,58 @@ Public-safe:
 - `Ember hello`
 - `Ember help`
 - `Ember capabilities`
-- `Ember vitals`
-- `Ember danger`
 - `Ember status`
 - `Ember where are you`
 - `Ember nearby`
 - `Ember look`
+- `Ember vitals`
+- `Ember hunger`
+- `Ember danger`
+- `Ember threat`
 - `Ember movement`
 
 Owner-only:
 
-- `Ember set home`
-- `Ember home`
-- `Ember home status`
-- `Ember clear home`
+- `Ember inventory`
+- `Ember food`
+- `Ember eat`
+- `Ember flee`
+- `Ember block`
+- `Ember ores nearby`
+- `Ember obstacle`
+- `Ember distance`
 - `Ember come`
 - `Ember follow me`
 - `Ember stop`
-- `Ember recover`
+- `Ember set home`
+- `Ember home`
+- `Ember stay home`
+- `Ember home status`
+- `Ember clear home`
 - `Ember respawn`
-- `Ember obstacle`
-- `Ember distance`
+- `Ember recover`
 - `Ember safety test`
 - `Ember state`
 - `Ember debug`
 - `Ember ai status`
 - `Ember action queue`
 
-## Recover Behavior
+## Safety Rules
 
-`Ember recover`:
+Defaults remain locked:
 
-- stops movement
-- clears queued actions
-- if dead: requests respawn
-- if alive + invalid position: says `Recovering my position.` once, then quits cleanly for Docker restart
-- if alive + valid position: reports ready/position/vitals summary
+- `ALLOW_MINING=false`
+- `ALLOW_COMBAT=false`
+- `ALLOW_BUILDING=false`
+- `ALLOW_INVENTORY=false`
+- `ALLOW_EATING=false`
+
+Notes:
+
+- Inventory read commands are safe and do not open chests/containers.
+- `EAT_FOOD` is blocked unless `ALLOW_EATING=true`.
+- Non-owner users cannot control movement/flee/recover/eat.
+- No arbitrary code execution or chat eval is implemented.
 
 ## Home Persistence
 
@@ -126,22 +144,25 @@ Home is persisted to `HOME_FILE_PATH` (default `./data/home.json`) with:
 - `timestamp`
 - `setBy`
 
-No database is used.
+## Recover Behavior
 
-## Safety and Locked Capabilities
+`Ember recover`:
 
-Defaults remain locked:
+- stops movement
+- clears queued actions
+- if dead: requests respawn
+- if alive + invalid position: says `Recovering my position.` once, then quits for Docker restart
+- if alive + valid position: reports ready/position/vitals
 
-- `ALLOW_MINING=false`
-- `ALLOW_COMBAT=false`
-- `ALLOW_BUILDING=false`
-- `ALLOW_INVENTORY=false`
+## AI Bridge Stub
 
-Scaffolded actions are safety-checked and blocked unless corresponding flags are enabled.
+- If `ENABLE_AI_BRIDGE=false`, bridge calls are skipped and logged periodically.
+- If `ENABLE_AI_BRIDGE=true`, observations are POSTed to `AI_BRIDGE_URL`.
+- AI-requested actions are still safety-validated before queueing.
 
 ## Known Limitation
 
-Movement is still terrain-limited because mining/building are disabled. Bot may stop with:
+Movement remains terrain-limited while mining/building are disabled. EMBER may stop with:
 
 - `I'm blocked and stopped moving.`
 

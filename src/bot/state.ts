@@ -32,10 +32,14 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
   return {
     movement: true,
     perception: true,
+    home: true,
+    flee: config.allowFlee,
+    inventoryRead: true,
+    eating: config.allowEating,
     mining: config.allowMining,
     combat: config.allowCombat,
     building: config.allowBuilding,
-    inventory: config.allowInventory,
+    containers: config.allowInventory,
     ai: config.enableAiBridge
   };
 }
@@ -51,6 +55,7 @@ function createInitialState(config: AppConfig): BotState {
     health: null,
     food: null,
     saturation: null,
+    hungerStatus: "okay",
     oxygen: null,
     onFire: null,
     inLava: null,
@@ -85,7 +90,9 @@ function createInitialState(config: AppConfig): BotState {
       allowMining: config.allowMining,
       allowCombat: config.allowCombat,
       allowBuilding: config.allowBuilding,
-      allowInventory: config.allowInventory
+      allowInventory: config.allowInventory,
+      allowEating: config.allowEating,
+      allowFlee: config.allowFlee
     },
     aiBridgeEnabled: config.enableAiBridge,
     aiBridgeUrl: config.enableAiBridge ? config.aiBridgeUrl ?? null : null,
@@ -144,6 +151,7 @@ export function createStateStore(config: AppConfig): StateStore {
 
   function setVitalsDetails(details: {
     saturation: number | null;
+    hungerStatus: "full" | "okay" | "hungry" | "starving";
     oxygen: number | null;
     onFire: boolean | null;
     inLava: boolean | null;
@@ -151,6 +159,7 @@ export function createStateStore(config: AppConfig): StateStore {
     onGround: boolean | null;
   }): void {
     state.saturation = details.saturation;
+    state.hungerStatus = details.hungerStatus;
     state.oxygen = details.oxygen;
     state.onFire = details.onFire;
     state.inLava = details.inLava;

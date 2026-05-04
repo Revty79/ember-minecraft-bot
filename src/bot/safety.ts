@@ -4,7 +4,9 @@ import type { BotAction, Logger, SafetyDecision, SafetyLayer, StateStore } from 
 const MINING_ACTIONS = new Set<BotAction["type"]>(["MINE_BLOCK"]);
 const COMBAT_ACTIONS = new Set<BotAction["type"]>(["ATTACK_ENTITY"]);
 const BUILDING_ACTIONS = new Set<BotAction["type"]>(["PLACE_BLOCK"]);
-const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY", "EQUIP_ITEM", "EAT_FOOD"]);
+const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY", "EQUIP_ITEM"]);
+const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
+const FLEE_ACTIONS = new Set<BotAction["type"]>(["FLEE_DANGER"]);
 
 export function createSafetyLayer(config: AppConfig, state: StateStore, logger: Logger): SafetyLayer {
   const actionTimestamps: number[] = [];
@@ -18,6 +20,8 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "LOOK_AT_OWNER",
     "SET_HOME",
     "GO_HOME",
+    "SET_STAY_HOME",
+    "FLEE_DANGER",
     "CLEAR_HOME",
     "RECOVER",
     "REPORT_STATE",
@@ -27,7 +31,13 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_AI_STATUS",
     "REPORT_ACTION_QUEUE",
     "REPORT_HOME_STATUS",
-    "REPORT_SAFETY_TEST"
+    "REPORT_SAFETY_TEST",
+    "REPORT_INVENTORY",
+    "REPORT_FOOD",
+    "REPORT_HUNGER",
+    "REPORT_THREAT",
+    "REPORT_BLOCK",
+    "REPORT_ORES_NEARBY"
   ]);
 
   function isOwner(username: string): boolean {
@@ -90,6 +100,14 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Inventory actions are disabled by policy.", requestor, action);
     }
 
+    if (!config.allowEating && EATING_ACTIONS.has(action.type)) {
+      return reject("Eating is disabled by safety settings.", requestor, action);
+    }
+
+    if (!config.allowFlee && FLEE_ACTIONS.has(action.type)) {
+      return reject("Flee actions are disabled by policy.", requestor, action);
+    }
+
     return { allowed: true, action };
   }
 
@@ -100,7 +118,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Action rate limit reached.", requestor, action);
     }
 
-    if (ownerOnlyTypes.has(action.type) && !isOwner(requestor)) {
+    if (ownerOnlyTypes.has(action.type) && !isOwner(requestor) && !isPrivilegedRequester(requestor)) {
       return reject("Only owner can run that action.", requestor, action);
     }
 

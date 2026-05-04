@@ -2,6 +2,8 @@
 import type { Bot } from "mineflayer";
 import type {
   BlockSummary,
+  BlockClass,
+  ClassifiedBlock,
   DangerSummary,
   EntitySummary,
   ImmediateObstacleReport,
@@ -56,6 +58,28 @@ const PASSABLE_BLOCKS = new Set<string>([
   "wall_redstone_torch"
 ]);
 
+const ORE_NAMES = new Set<string>([
+  "coal_ore",
+  "deepslate_coal_ore",
+  "iron_ore",
+  "deepslate_iron_ore",
+  "copper_ore",
+  "deepslate_copper_ore",
+  "gold_ore",
+  "deepslate_gold_ore",
+  "redstone_ore",
+  "deepslate_redstone_ore",
+  "lapis_ore",
+  "deepslate_lapis_ore",
+  "diamond_ore",
+  "deepslate_diamond_ore",
+  "emerald_ore",
+  "deepslate_emerald_ore",
+  "nether_gold_ore",
+  "nether_quartz_ore",
+  "ancient_debris"
+]);
+
 function toVec3Snapshot(position: { x: number; y: number; z: number } | null | undefined): Vec3Snapshot | null {
   if (!position) return null;
   if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) return null;
@@ -93,6 +117,18 @@ function isPassableBlock(name: string | null, boundingBox: string | null): boole
   if (PASSABLE_BLOCKS.has(name)) return true;
   if (boundingBox === "empty") return true;
   return false;
+}
+
+function classifyBlockName(name: string | null): BlockClass {
+  if (!name) return "unknown";
+  if (name === "air" || name === "cave_air" || name === "void_air") return "air";
+  if (name.includes("water") || name.includes("lava")) return "fluid";
+  if (PASSABLE_BLOCKS.has(name)) return "passable";
+  if (ORE_NAMES.has(name)) return "ore";
+  if (name.endsWith("_log") || name.endsWith("_wood")) return "log";
+  if (name.includes("dirt") || name.includes("grass_block") || name.includes("podzol")) return "dirt";
+  if (name.includes("stone") || name.includes("deepslate")) return "stone";
+  return "solid";
 }
 
 function normalizeLabel(value: unknown): string | null {
@@ -217,7 +253,9 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     const distance = nearest.distance;
 
     let proximity: DangerSummary["proximity"] = "far";
-    if (distance <= 4) {
+    if (distance <= 2) {
+      proximity = "critical";
+    } else if (distance <= 4) {
       proximity = "close";
     } else if (distance <= 10) {
       proximity = "medium";
@@ -254,6 +292,56 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 12);
+  }
+
+  function getNearbyBlocksByName(name: string, radius: number): BlockSummary[] {
+    if (!bot.entity) return [];
+
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) return [];
+
+    const sampledRadius = Math.min(Math.max(Math.floor(radius), 1), 8);
+    const center = bot.entity.position.floored();
+    let count = 0;
+
+    for (let dx = -sampledRadius; dx <= sampledRadius; dx += 1) {
+      for (let dy = -sampledRadius; dy <= sampledRadius; dy += 1) {
+        for (let dz = -sampledRadius; dz <= sampledRadius; dz += 1) {
+          const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+          const block = bot.blockAt(pos);
+          if (!block) continue;
+          if (block.name.toLowerCase() === normalized) {
+            count += 1;
+          }
+        }
+      }
+    }
+
+    if (count === 0) return [];
+    return [{ name: normalized, count }];
+  }
+
+  function getNearbyOresSummary(radius: number): BlockSummary[] {
+    if (!bot.entity) return [];
+
+    const sampledRadius = Math.min(Math.max(Math.floor(radius), 1), 8);
+    const center = bot.entity.position.floored();
+    const counts = new Map<string, number>();
+
+    for (let dx = -sampledRadius; dx <= sampledRadius; dx += 1) {
+      for (let dy = -sampledRadius; dy <= sampledRadius; dy += 1) {
+        for (let dz = -sampledRadius; dz <= sampledRadius; dz += 1) {
+          const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+          const block = bot.blockAt(pos);
+          if (!block || !ORE_NAMES.has(block.name)) continue;
+          counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
+        }
+      }
+    }
+
+    return Array.from(counts.entries())
+      .map(([oreName, count]) => ({ name: oreName, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }
 
   function getImmediateObstacles(): ImmediateObstacleReport {
@@ -362,6 +450,15 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     return report;
   }
 
+  function getBlockInFront(): ClassifiedBlock {
+    const obstacle = getImmediateObstacles();
+    const front = obstacle.blockFrontFeet.name ?? null;
+    return {
+      name: front,
+      classification: classifyBlockName(front)
+    };
+  }
+
   function getPerceptionSnapshot(): PerceptionSnapshot {
     const snapshot: PerceptionSnapshot = {
       timestamp: new Date().toISOString(),
@@ -380,6 +477,10 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     getNearbyEntities,
     getNearbyHostileMobs,
     getNearbyBlocksSummary,
+    getNearbyBlocksByName,
+    getNearbyOresSummary,
+    classifyBlock: classifyBlockName,
+    getBlockInFront,
     getImmediateObstacles,
     getDangerSummary,
     getPerceptionSnapshot

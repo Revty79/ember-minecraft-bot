@@ -69,6 +69,11 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember threat") {
+      actions.queueAction(username, { type: "REPORT_THREAT" });
+      return;
+    }
+
     if (normalized === "ember where are you") {
       actions.queueAction(username, { type: "REPORT_WHERE_ARE_YOU" });
       return;
@@ -86,6 +91,11 @@ export function createCommandRouter(
 
     if (normalized === "ember movement") {
       actions.queueAction(username, { type: "REPORT_MOVEMENT" });
+      return;
+    }
+
+    if (normalized === "ember hunger") {
+      actions.queueAction(username, { type: "REPORT_HUNGER" });
       return;
     }
 
@@ -114,6 +124,11 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember stay home") {
+      queueOwnerOnlyCommand(username, { type: "SET_STAY_HOME" }, "stay-home");
+      return;
+    }
+
     if (normalized === "ember home status") {
       queueOwnerOnlyCommand(username, { type: "REPORT_HOME_STATUS" }, "home-status");
       return;
@@ -134,6 +149,26 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember inventory") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_INVENTORY" }, "inventory");
+      return;
+    }
+
+    if (normalized === "ember food") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_FOOD" }, "food");
+      return;
+    }
+
+    if (normalized === "ember eat") {
+      queueOwnerOnlyCommand(username, { type: "EAT_FOOD" }, "eat");
+      return;
+    }
+
+    if (normalized === "ember flee") {
+      queueOwnerOnlyCommand(username, { type: "FLEE_DANGER" }, "flee");
+      return;
+    }
+
     if (normalized === "ember safety test") {
       queueOwnerOnlyCommand(username, { type: "REPORT_SAFETY_TEST" }, "safety-test");
       return;
@@ -146,6 +181,16 @@ export function createCommandRouter(
 
     if (normalized === "ember obstacle") {
       queueOwnerOnlyCommand(username, { type: "REPORT_OBSTACLE" }, "obstacle");
+      return;
+    }
+
+    if (normalized === "ember block") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_BLOCK" }, "block");
+      return;
+    }
+
+    if (normalized === "ember ores nearby") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_ORES_NEARBY" }, "ores-nearby");
       return;
     }
 

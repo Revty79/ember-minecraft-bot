@@ -1,5 +1,6 @@
 ﻿import type { Bot } from "mineflayer";
 import type { AppConfig } from "../config";
+import { getFoodItems, getInventorySummary, pickBestFoodItem } from "./inventory";
 import type {
   ActionController,
   ActionQueueItem,
@@ -21,6 +22,8 @@ const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
   "FOLLOW_OWNER",
   "STOP_MOVING",
   "GO_HOME",
+  "SET_STAY_HOME",
+  "FLEE_DANGER",
   "LOOK_AT_OWNER"
 ]);
 
@@ -29,12 +32,15 @@ const SCAFFOLDED_CAPABILITY_ACTIONS = new Set<BotAction["type"]>([
   "ATTACK_ENTITY",
   "PLACE_BLOCK",
   "OPEN_INVENTORY",
-  "EQUIP_ITEM",
-  "EAT_FOOD"
+  "EQUIP_ITEM"
 ]);
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function describeAction(action: BotAction): string {
@@ -55,6 +61,10 @@ function describeAction(action: BotAction): string {
       return "SET_HOME";
     case "GO_HOME":
       return "GO_HOME";
+    case "SET_STAY_HOME":
+      return "SET_STAY_HOME";
+    case "FLEE_DANGER":
+      return "FLEE_DANGER";
     case "RECOVER":
       return "RECOVER";
     default:
@@ -69,15 +79,36 @@ function formatDanger(danger: DangerSummary): string {
   return `${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(1)} (${danger.proximity})`;
 }
 
+function formatFoodItems(foodItems: { name: string; count: number }[]): string {
+  if (foodItems.length === 0) {
+    return "Food: none.";
+  }
+
+  const text = foodItems
+    .slice(0, 5)
+    .map((entry) => `${entry.name} x${entry.count}`)
+    .join(", ");
+  return `Food: ${text}`;
+}
+
 function isFinitePosition(position: { x: number; y: number; z: number } | null | undefined): boolean {
   if (!position) return false;
   return Number.isFinite(position.x) && Number.isFinite(position.y) && Number.isFinite(position.z);
+}
+
+function hungerStatusFromFood(food: number | null): "full" | "okay" | "hungry" | "starving" {
+  if (food === null) return "okay";
+  if (food >= 19) return "full";
+  if (food >= 13) return "okay";
+  if (food >= 7) return "hungry";
+  return "starving";
 }
 
 function movementModeLabel(mode: MovementMode, stuckCount: number): string {
   if (stuckCount > 0) return "stuck";
   if (mode === "come") return "coming";
   if (mode === "follow") return "following";
+  if (mode === "flee") return "fleeing";
   return mode;
 }
 
@@ -115,7 +146,7 @@ export function createActionController(
       const reason = decision.reason ?? "Action blocked by safety.";
       logger.warn("safety", `Action rejected for ${requestedBy}: ${reason}`, action);
 
-      if (!safety.isPrivilegedRequester(requestedBy)) {
+      if (requestedBy !== "SYSTEM" && requestedBy !== "AI") {
         chat.send(reason, "safety-rejected");
       }
       return;
@@ -265,6 +296,14 @@ export function createActionController(
         return movement.goHome(item.requestedBy);
       }
 
+      case "SET_STAY_HOME": {
+        return movement.setStayHome(item.requestedBy);
+      }
+
+      case "FLEE_DANGER": {
+        return movement.startFleeFromDanger(item.requestedBy);
+      }
+
       case "RECOVER": {
         logger.log("survival", "Recovery requested.");
         clearMovementActions("recover");
@@ -385,7 +424,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, danger, where are you, nearby, look, movement. Owner: come, follow me, stop, respawn, distance, obstacle, set home, home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: inventory, food, eat, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -466,9 +505,13 @@ export function createActionController(
       case "REPORT_CAPABILITIES": {
         const caps = state.state.capabilities;
         chat.send(
-          `Capabilities: movement/perception enabled. mining=${String(caps.mining)}, combat=${String(
-            caps.combat
-          )}, building=${String(caps.building)}, inventory=${String(caps.inventory)}, ai=${String(caps.ai)}.`,
+          `Capabilities: movement=${String(caps.movement)}, perception=${String(caps.perception)}, home=${String(
+            caps.home
+          )}, flee=${String(caps.flee)}, inventoryRead=${String(caps.inventoryRead)}, eating=${String(
+            caps.eating
+          )}, mining=${String(caps.mining)}, combat=${String(caps.combat)}, building=${String(
+            caps.building
+          )}, containers=${String(caps.containers)}, ai=${String(caps.ai)}.`,
           "capabilities"
         );
         return true;
@@ -482,7 +525,7 @@ export function createActionController(
         const dangerText = formatDanger(snapshot.dangerSummary);
 
         chat.send(
-          `Vitals: hp=${snapshot.health ?? "unknown"}, food=${snapshot.food ?? "unknown"}, sat=${snapshot.saturation ?? "unknown"}, oxy=${snapshot.oxygen ?? "unknown"}, alive=${snapshot.alive}, pos=${pos}, danger=${dangerText}.`,
+          `Vitals: hp=${snapshot.health ?? "unknown"}, food=${snapshot.food ?? "unknown"}, sat=${snapshot.saturation ?? "unknown"}, hunger=${snapshot.hungerStatus}, oxy=${snapshot.oxygen ?? "unknown"}, alive=${snapshot.alive}, pos=${pos}, danger=${dangerText}.`,
           "vitals"
         );
         return true;
@@ -498,8 +541,28 @@ export function createActionController(
         }
 
         chat.send(
-          `Danger: nearest ${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(1)} blocks.`,
+          `Danger: nearest ${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(
+            1
+          )} blocks (${danger.proximity}).`,
           "danger-report"
+        );
+        return true;
+      }
+
+      case "REPORT_THREAT": {
+        const danger = perception.getDangerSummary(config.hostileDangerRadius);
+        state.setDangerSummary(danger);
+
+        if (danger.hostileCount === 0 || danger.nearestHostileDistance === null || !danger.nearestHostileName) {
+          chat.send("Threat: none.", "threat-none");
+          return true;
+        }
+
+        chat.send(
+          `Threat: ${danger.proximity}. nearest ${danger.nearestHostileName} at ${danger.nearestHostileDistance.toFixed(
+            1
+          )} blocks.`,
+          "threat-report"
         );
         return true;
       }
@@ -510,23 +573,110 @@ export function createActionController(
         const goal = snapshot.movement.lastKnownGoal ?? snapshot.currentGoal ?? "none";
         const distance = movement.getDistanceToOwner();
         const distanceText = distance === null ? "unavailable" : distance.toFixed(1);
+        const stayHome = movement.isStayHomeEnabled();
 
         chat.send(
-          `Movement: mode=${mode}, goal=${goal}, stuckCount=${snapshot.movement.stuckCount}, distanceToOwner=${distanceText}.`,
+          `Movement: mode=${mode}, goal=${goal}, stuckCount=${snapshot.movement.stuckCount}, distanceToOwner=${distanceText}, stayHome=${String(
+            stayHome
+          )}.`,
           "movement"
         );
+        return true;
+      }
+
+      case "REPORT_INVENTORY": {
+        const summary = getInventorySummary(bot);
+        logger.log("state", "Inventory summary", summary);
+
+        chat.send(
+          `Inventory: empty=${summary.emptySlots}/${summary.totalSlots}, held=${summary.heldItem ?? "none"}, food=${summary.foodCount}, tools=${summary.toolCount}, weapons=${summary.weaponCount}, armor=${summary.armorCount}.`,
+          "inventory"
+        );
+        return true;
+      }
+
+      case "REPORT_FOOD": {
+        const foodItems = getFoodItems(bot);
+        logger.log("survival", "Food inventory summary", foodItems);
+        chat.send(formatFoodItems(foodItems), "food");
+        return true;
+      }
+
+      case "REPORT_HUNGER": {
+        const snapshot = state.getBotSnapshot();
+        const hungerStatus = snapshot.hungerStatus || hungerStatusFromFood(snapshot.food);
+        chat.send(
+          `Hunger: food=${snapshot.food ?? "unknown"}, saturation=${snapshot.saturation ?? "unknown"}, status=${hungerStatus}.`,
+          "hunger"
+        );
+        return true;
+      }
+
+      case "EAT_FOOD": {
+        if (!config.allowEating) {
+          chat.send("Eating is disabled by safety settings.", "eat-disabled");
+          return false;
+        }
+
+        const selectedFood = pickBestFoodItem(bot, action.itemName);
+        if (!selectedFood) {
+          chat.send("Food: none.", "eat-no-food");
+          return false;
+        }
+
+        try {
+          await bot.equip(selectedFood, "hand");
+          bot.activateItem();
+          await sleep(1600);
+          bot.deactivateItem();
+          logger.log("survival", `Ate food item ${selectedFood.name}`);
+          chat.send(`Ate ${selectedFood.name}.`, "eat-success");
+          return true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error("survival", `Failed to eat ${selectedFood.name}: ${message}`);
+          chat.send("I could not eat right now.", "eat-failed");
+          return false;
+        }
+      }
+
+      case "REPORT_BLOCK": {
+        const obstacle = perception.getImmediateObstacles();
+        const front = perception.getBlockInFront();
+        const below = obstacle.blockBelow.name ?? "unknown";
+        const feet = obstacle.blockAtFeet.name ?? "unknown";
+        const head = obstacle.blockAtHead.name ?? "unknown";
+        chat.send(
+          `Block: front=${front.name ?? "unknown"}(${front.classification}), below=${below}, feet=${feet}, head=${head}.`,
+          "block"
+        );
+        return true;
+      }
+
+      case "REPORT_ORES_NEARBY": {
+        const ores = perception.getNearbyOresSummary(6);
+        if (ores.length === 0) {
+          chat.send("Ores nearby: none visible.", "ores-none");
+          return true;
+        }
+
+        const oreText = ores
+          .slice(0, 5)
+          .map((ore) => `${ore.name} x${ore.count}`)
+          .join(", ");
+        chat.send(`Ores nearby: ${oreText}`, "ores-report");
         return true;
       }
 
       case "REPORT_HOME_STATUS": {
         const home = state.state.homeRecord;
         if (!home) {
-          chat.send("Home: not set.", "home-status-empty");
+          chat.send("No home point set.", "home-status-empty");
           return true;
         }
 
         chat.send(
-          `Home: (${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)}) dim=${home.dimension ?? "unknown"} setBy=${home.setBy}.`,
+          `Home is set at (${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)}) in ${home.dimension ?? "unknown"}.`,
           "home-status"
         );
         return true;
@@ -541,25 +691,29 @@ export function createActionController(
         const combat = safety.validateAction(item.requestedBy, { type: "ATTACK_ENTITY" }, { dryRun: true });
         const building = safety.validateAction(item.requestedBy, { type: "PLACE_BLOCK" }, { dryRun: true });
         const inventory = safety.validateAction(item.requestedBy, { type: "OPEN_INVENTORY" }, { dryRun: true });
+        const eating = safety.validateAction(item.requestedBy, { type: "EAT_FOOD" }, { dryRun: true });
 
         const miningWord = mining.allowed ? "allowed" : "blocked";
         const combatWord = combat.allowed ? "allowed" : "blocked";
         const buildingWord = building.allowed ? "allowed" : "blocked";
         const inventoryWord = inventory.allowed ? "allowed" : "blocked";
+        const eatingWord = eating.allowed ? "allowed" : "blocked";
 
         const result =
           miningWord === "blocked" &&
           combatWord === "blocked" &&
           buildingWord === "blocked" &&
-          inventoryWord === "blocked"
+          inventoryWord === "blocked" &&
+          eatingWord === "blocked"
             ? "Safety test: mining blocked, combat blocked, building blocked, inventory blocked."
-            : `Safety test: mining ${miningWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}.`;
+            : `Safety test: mining ${miningWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}, eating ${eatingWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
           combat,
           building,
-          inventory
+          inventory,
+          eating
         });
         chat.send(result, "safety-test");
         return true;

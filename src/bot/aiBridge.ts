@@ -95,6 +95,8 @@ function asBotAction(value: unknown): BotAction | null {
     case "LOOK_AT_OWNER":
     case "SET_HOME":
     case "GO_HOME":
+    case "SET_STAY_HOME":
+    case "FLEE_DANGER":
     case "CLEAR_HOME":
     case "RECOVER":
     case "REPORT_STATE":
@@ -110,8 +112,14 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_ACTION_QUEUE":
     case "REPORT_CAPABILITIES":
     case "REPORT_VITALS":
+    case "REPORT_HUNGER":
     case "REPORT_DANGER":
+    case "REPORT_THREAT":
+    case "REPORT_INVENTORY":
+    case "REPORT_FOOD":
     case "REPORT_MOVEMENT":
+    case "REPORT_BLOCK":
+    case "REPORT_ORES_NEARBY":
     case "REPORT_HOME_STATUS":
     case "REPORT_SAFETY_TEST": {
       return {

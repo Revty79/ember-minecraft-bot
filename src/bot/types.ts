@@ -73,7 +73,7 @@ export interface ImmediateObstacleReport {
   appearsStuck: boolean;
 }
 
-export type DangerProximity = "none" | "far" | "medium" | "close";
+export type DangerProximity = "none" | "far" | "medium" | "close" | "critical";
 
 export interface DangerSummary {
   hostileCount: number;
@@ -82,13 +82,44 @@ export interface DangerSummary {
   proximity: DangerProximity;
 }
 
+export type HungerStatus = "full" | "okay" | "hungry" | "starving";
+
+export interface FoodItemSummary {
+  name: string;
+  count: number;
+}
+
+export interface InventorySummary {
+  totalSlots: number;
+  usedSlots: number;
+  emptySlots: number;
+  heldItem: string | null;
+  foodCount: number;
+  toolCount: number;
+  weaponCount: number;
+  armorCount: number;
+  importantMaterials: Record<string, number>;
+  foodItems: FoodItemSummary[];
+}
+
+export type BlockClass = "air" | "passable" | "solid" | "fluid" | "ore" | "log" | "dirt" | "stone" | "unknown";
+
+export interface ClassifiedBlock {
+  name: string | null;
+  classification: BlockClass;
+}
+
 export interface CapabilitySummary {
   movement: boolean;
   perception: boolean;
+  home: boolean;
+  flee: boolean;
+  inventoryRead: boolean;
+  eating: boolean;
   mining: boolean;
   combat: boolean;
   building: boolean;
-  inventory: boolean;
+  containers: boolean;
   ai: boolean;
 }
 
@@ -112,7 +143,7 @@ export interface PerceptionSnapshot {
   dangerSummary: DangerSummary;
 }
 
-export type MovementMode = "idle" | "come" | "follow" | "home";
+export type MovementMode = "idle" | "come" | "follow" | "home" | "flee";
 
 export interface MovementState {
   mode: MovementMode;
@@ -131,6 +162,8 @@ export interface SafetyFlags {
   allowCombat: boolean;
   allowBuilding: boolean;
   allowInventory: boolean;
+  allowEating: boolean;
+  allowFlee: boolean;
 }
 
 export interface BotState {
@@ -143,6 +176,7 @@ export interface BotState {
   health: number | null;
   food: number | null;
   saturation: number | null;
+  hungerStatus: HungerStatus;
   oxygen: number | null;
   onFire: boolean | null;
   inLava: boolean | null;
@@ -212,6 +246,8 @@ export type BotAction =
   | { type: "LOOK_AT_OWNER" }
   | { type: "SET_HOME" }
   | { type: "GO_HOME" }
+  | { type: "SET_STAY_HOME" }
+  | { type: "FLEE_DANGER" }
   | { type: "CLEAR_HOME" }
   | { type: "RECOVER" }
   | { type: "REPORT_STATE" }
@@ -227,8 +263,14 @@ export type BotAction =
   | { type: "REPORT_ACTION_QUEUE" }
   | { type: "REPORT_CAPABILITIES" }
   | { type: "REPORT_VITALS" }
+  | { type: "REPORT_HUNGER" }
   | { type: "REPORT_DANGER" }
+  | { type: "REPORT_THREAT" }
+  | { type: "REPORT_INVENTORY" }
+  | { type: "REPORT_FOOD" }
   | { type: "REPORT_MOVEMENT" }
+  | { type: "REPORT_BLOCK" }
+  | { type: "REPORT_ORES_NEARBY" }
   | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
   | { type: "MINE_BLOCK"; blockName?: string }
@@ -284,6 +326,7 @@ export interface StateStore {
   setHealthAndFood: (health: number | null, food: number | null) => void;
   setVitalsDetails: (details: {
     saturation: number | null;
+    hungerStatus: HungerStatus;
     oxygen: number | null;
     onFire: boolean | null;
     inLava: boolean | null;
@@ -352,6 +395,8 @@ export interface MovementController {
   setHome: (requestor: string) => boolean;
   clearHome: (requestor: string) => boolean;
   goHome: (requestor: string) => boolean;
+  setStayHome: (requestor: string) => boolean;
+  startFleeFromDanger: (requestor: string) => boolean;
   stop: (reason: string) => void;
   stopForDanger: (reason: string) => void;
   tryRespawn: (requestor: string) => boolean;
@@ -365,6 +410,7 @@ export interface MovementController {
   getCurrentGoalDescription: () => string;
   getMode: () => MovementMode;
   isMoving: () => boolean;
+  isStayHomeEnabled: () => boolean;
   isEntityPositionHealthy: () => boolean;
 }
 
@@ -373,6 +419,10 @@ export interface PerceptionController {
   getNearbyEntities: (radius: number) => EntitySummary[];
   getNearbyHostileMobs: (radius: number) => EntitySummary[];
   getNearbyBlocksSummary: (radius: number) => BlockSummary[];
+  getNearbyBlocksByName: (name: string, radius: number) => BlockSummary[];
+  getNearbyOresSummary: (radius: number) => BlockSummary[];
+  classifyBlock: (blockName: string | null) => BlockClass;
+  getBlockInFront: () => ClassifiedBlock;
   getImmediateObstacles: () => ImmediateObstacleReport;
   getDangerSummary: (radius?: number) => DangerSummary;
   getPerceptionSnapshot: () => PerceptionSnapshot;

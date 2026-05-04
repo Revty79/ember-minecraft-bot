@@ -34,7 +34,9 @@ logger.log(
   "config",
   `safety allowMining=${String(config.allowMining)} allowCombat=${String(config.allowCombat)} allowBuilding=${String(
     config.allowBuilding
-  )} allowInventory=${String(config.allowInventory)}`
+  )} allowInventory=${String(config.allowInventory)} allowEating=${String(config.allowEating)} allowFlee=${String(
+    config.allowFlee
+  )}`
 );
 logger.log(
   "config",
@@ -48,7 +50,9 @@ logger.log(
   "config",
   `survival dangerScanMs=${config.dangerScanIntervalMs} dangerRadius=${config.hostileDangerRadius} stopRadius=${config.hostileStopRadius} stopOnDanger=${String(
     config.stopOnDanger
-  )}`
+  )} fleeDistance=${config.fleeDistance} fleeHomeRadius=${config.fleeHomeRadius} fleeToHome=${String(
+    config.fleeToHome
+  )} fleeToOwner=${String(config.fleeToOwner)}`
 );
 logger.log(
   "config",
@@ -153,6 +157,11 @@ const dangerInterval = setInterval(() => {
   actions.clearMovementActions("danger-close");
   movement.stopForDanger("danger-close");
   chat.send("Danger close. I am stopping.", "danger-stop", { bypassRateLimit: true });
+
+  if (config.allowFlee) {
+    logger.warn("survival", "Danger close. Attempting flee action.");
+    actions.queueAction("SYSTEM", { type: "FLEE_DANGER" });
+  }
 }, config.dangerScanIntervalMs);
 dangerInterval.unref();
 
