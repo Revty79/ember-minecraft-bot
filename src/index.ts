@@ -38,7 +38,7 @@ logger.log(
     config.allowEquip
   )} allowFlee=${String(config.allowFlee)} allowHarvest=${String(config.allowHarvest)} allowCropHarvest=${String(
     config.allowCropHarvest
-  )}`
+  )} taskSystem=${String(config.enableTaskSystem)} taskOwnerOnly=${String(config.taskOwnerOnly)}`
 );
 logger.log(
   "config",

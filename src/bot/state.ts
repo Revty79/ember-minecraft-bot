@@ -35,6 +35,7 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     home: true,
     flee: config.allowFlee,
     wandering: config.allowWander,
+    tasks: config.enableTaskSystem,
     inventoryRead: true,
     equipment: config.allowEquip,
     eating: config.allowEating,
@@ -92,6 +93,17 @@ function createInitialState(config: AppConfig): BotState {
       wanderStartedAt: null,
       wanderEndsAt: null,
       wanderLastStopReason: null
+    },
+    task: {
+      enabled: config.enableTaskSystem,
+      ownerOnly: config.taskOwnerOnly,
+      active: false,
+      name: null,
+      requestedBy: null,
+      startedAt: null,
+      endedAt: null,
+      status: "idle",
+      lastResult: null
     },
     lastError: null,
     lastDeathTimestamp: null,
@@ -267,6 +279,10 @@ export function createStateStore(config: AppConfig): StateStore {
     state.movement.wanderLastStopReason = wanderState.lastStopReason;
   }
 
+  function setTaskState(taskState: BotState["task"]): void {
+    state.task = { ...taskState };
+  }
+
   function setFollowTarget(target: string | null): void {
     state.movement.followTarget = target;
   }
@@ -311,6 +327,7 @@ export function createStateStore(config: AppConfig): StateStore {
       dangerSummary: { ...state.dangerSummary },
       capabilities: { ...state.capabilities },
       movement: { ...state.movement },
+      task: { ...state.task },
       safetyFlags: { ...state.safetyFlags }
     };
   }
@@ -346,6 +363,7 @@ export function createStateStore(config: AppConfig): StateStore {
     setMovementStartedAt,
     setMovementLastProgressAt,
     setWanderState,
+    setTaskState,
     setFollowTarget,
     setLastError,
     setLastDeathTimestamp,

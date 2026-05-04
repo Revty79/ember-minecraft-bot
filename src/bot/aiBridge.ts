@@ -47,6 +47,7 @@ function asBotAction(value: unknown): BotAction | null {
     category?: unknown;
     mode?: unknown;
     force?: unknown;
+    task?: unknown;
   };
 
   if (typeof action.type !== "string") {
@@ -109,6 +110,7 @@ function asBotAction(value: unknown): BotAction | null {
     case "OPEN_INVENTORY":
     case "STOP_HARVEST":
     case "STOP_WANDER":
+    case "STOP_TASK":
     case "STOP_MOVING":
     case "STOP_MINING":
     case "RESPAWN":
@@ -146,6 +148,7 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_HARVEST_REPORT":
     case "REPORT_YARD_STATUS":
     case "REPORT_YARD_CHECK":
+    case "REPORT_TASK":
     case "REPORT_HOME_STATUS":
     case "REPORT_SAFETY_TEST": {
       return {
@@ -179,6 +182,23 @@ function asBotAction(value: unknown): BotAction | null {
       return {
         type: "CRAFT_ITEM",
         itemName: asOptionalString(action.itemName)
+      };
+    }
+
+    case "START_TASK": {
+      const task =
+        action.task === "go_home" ||
+        action.task === "follow_owner" ||
+        action.task === "eat_if_hungry" ||
+        action.task === "wander_yard_once" ||
+        action.task === "harvest_one_target" ||
+        action.task === "mine_one_safe_target"
+          ? action.task
+          : null;
+      if (!task) return null;
+      return {
+        type: "START_TASK",
+        task
       };
     }
 

@@ -2,25 +2,24 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.10.2: safe yard movement reliability polish**.
+This release is **v0.11: one-shot owner task system**.
 
 - AI bridge remains optional and disabled by default.
 - No autonomous behavior loops are enabled.
 - Combat/building/containers/crafting remain locked by default.
 - Harvesting exists as single-command scaffolding behind safety flags.
 - Wandering is owner-commanded, radius-bound, and time-limited behind safety flags.
+- Tasks are owner-commanded one-shot objectives only.
 
-## v0.10.2 Highlights
+## v0.11 Highlights
 
-- Added full wander env defaults in `.env.example`.
-- Improved wander target selection for flatter, safer yard movement.
-- Added configurable wander candidate attempts and flat-only mode:
-  - `WANDER_TARGET_ATTEMPTS`
-  - `WANDER_FLAT_ONLY`
-  - `WANDER_MAX_STUCK_RETRIES`
-- Improved wander stuck handling with one bounded retry before safe stop.
-- Enhanced `Ember yard check` diagnostics (flat mode, attempts, terrain blocks, safe-state hint).
-- Added `short_grass` to default harvest allowed blocks.
+- Added owner-only one-shot task commands with task state tracking.
+- Added task controls:
+  - `Ember task report`
+  - `Ember task stop`
+- Task actions use existing safety gates and capability restrictions.
+- Added task visibility in `Ember capabilities` and `Ember safety test`.
+- Kept non-autonomous behavior (single objective per task, then stop).
 
 ## Environment
 
@@ -52,6 +51,8 @@ ALLOW_EQUIP=false
 ALLOW_FLEE=true
 ALLOW_HARVEST=false
 ALLOW_CROP_HARVEST=false
+ENABLE_TASK_SYSTEM=true
+TASK_OWNER_ONLY=true
 REQUIRE_MATURE_CROPS=true
 REPLANT_CROPS=false
 
@@ -189,6 +190,14 @@ Owner-only:
 - `Ember debug`
 - `Ember ai status`
 - `Ember action queue`
+- `Ember task go home`
+- `Ember task follow owner`
+- `Ember task eat if hungry`
+- `Ember task wander once`
+- `Ember task harvest once`
+- `Ember task mine once`
+- `Ember task report`
+- `Ember task stop`
 
 ## Capability Model
 
@@ -198,6 +207,7 @@ Owner-only:
 - perception
 - home
 - flee
+- tasks
 - inventoryRead
 - equipment
 - eating
@@ -230,6 +240,7 @@ Important notes:
 - Mining and harvesting remain explicit command actions.
 - Home protection still blocks risky mining near home.
 - While wandering, mining/harvesting/combat/building/container/crafting actions are blocked.
+- Task system is one-shot only and does not add autonomous loops.
 
 ## Harvesting (v0.9)
 
@@ -267,6 +278,17 @@ Observation snapshot now includes:
 - `Ember wander stop` and `Ember stop` both stop wandering immediately.
 - `Ember yard status` reports center/radius/distance/inside/active.
 - `Ember yard check` reports safety diagnostics for live testing.
+
+## Task System (v0.11)
+
+- `Ember task go home`: one-shot home task.
+- `Ember task follow owner`: starts follow objective as a task.
+- `Ember task eat if hungry`: eats only when hunger requires it.
+- `Ember task wander once`: runs one bounded yard-wander task.
+- `Ember task harvest once`: harvests one safe target.
+- `Ember task mine once`: mines one safe target.
+- `Ember task report`: reports current/last task state.
+- `Ember task stop`: stops active task and clears queued task actions.
 
 ## Docker
 

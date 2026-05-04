@@ -24,6 +24,8 @@ export interface AppConfig {
   allowHarvest: boolean;
   allowCropHarvest: boolean;
   allowWander: boolean;
+  enableTaskSystem: boolean;
+  taskOwnerOnly: boolean;
   replantCrops: boolean;
   requireMatureCrops: boolean;
   mineOwnerOnly: boolean;
@@ -187,6 +189,8 @@ export function loadConfig(): AppConfig {
   const allowHarvest = readBoolean("ALLOW_HARVEST", false);
   const allowCropHarvest = readBoolean("ALLOW_CROP_HARVEST", false);
   const allowWander = readBoolean("ALLOW_WANDER", false);
+  const enableTaskSystem = readBoolean("ENABLE_TASK_SYSTEM", true);
+  const taskOwnerOnly = readBoolean("TASK_OWNER_ONLY", true);
   const replantCrops = readBoolean("REPLANT_CROPS", false);
   const requireMatureCrops = readBoolean("REQUIRE_MATURE_CROPS", true);
   const mineOwnerOnly = readBoolean("MINE_OWNER_ONLY", true);
@@ -341,6 +345,8 @@ export function loadConfig(): AppConfig {
     allowHarvest,
     allowCropHarvest,
     allowWander,
+    enableTaskSystem,
+    taskOwnerOnly,
     replantCrops,
     requireMatureCrops,
     mineOwnerOnly,

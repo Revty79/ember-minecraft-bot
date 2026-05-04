@@ -119,6 +119,46 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember task stop") {
+      queueOwnerOnlyCommand(username, { type: "STOP_TASK" }, "task-stop");
+      return;
+    }
+
+    if (normalized === "ember task report" || normalized === "ember task status") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_TASK" }, "task-report");
+      return;
+    }
+
+    if (normalized === "ember task go home" || normalized === "ember task home") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "go_home" }, "task-go-home");
+      return;
+    }
+
+    if (normalized === "ember task follow owner" || normalized === "ember task follow") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "follow_owner" }, "task-follow-owner");
+      return;
+    }
+
+    if (normalized === "ember task eat if hungry" || normalized === "ember task eat") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "eat_if_hungry" }, "task-eat-if-hungry");
+      return;
+    }
+
+    if (normalized === "ember task wander once" || normalized === "ember task wander") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "wander_yard_once" }, "task-wander-once");
+      return;
+    }
+
+    if (normalized === "ember task harvest once" || normalized === "ember task harvest") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "harvest_one_target" }, "task-harvest-once");
+      return;
+    }
+
+    if (normalized === "ember task mine once" || normalized === "ember task mine") {
+      queueOwnerOnlyCommand(username, { type: "START_TASK", task: "mine_one_safe_target" }, "task-mine-once");
+      return;
+    }
+
     if (normalized === "ember wander stop") {
       queueOwnerOnlyCommand(username, { type: "STOP_WANDER" }, "wander-stop");
       return;

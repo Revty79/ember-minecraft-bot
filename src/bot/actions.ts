@@ -26,7 +26,9 @@ import type {
   MovementMode,
   PerceptionController,
   SafetyLayer,
-  StateStore
+  StateStore,
+  TaskName,
+  TaskState
 } from "./types";
 
 const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
@@ -44,6 +46,8 @@ const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
   "STOP_HARVEST",
   "LOOK_AT_OWNER"
 ]);
+
+const TASK_ACTION_TYPES = new Set<BotAction["type"]>(["START_TASK", "STOP_TASK", "REPORT_TASK"]);
 
 const SCAFFOLDED_CAPABILITY_ACTIONS = new Set<BotAction["type"]>([
   "ATTACK_ENTITY",
@@ -111,6 +115,12 @@ function describeAction(action: BotAction): string {
       return "MINE_BLOCK";
     case "STOP_WANDER":
       return "STOP_WANDER";
+    case "START_TASK":
+      return `START_TASK(${action.task})`;
+    case "STOP_TASK":
+      return "STOP_TASK";
+    case "REPORT_TASK":
+      return "REPORT_TASK";
     case "STOP_MINING":
       return "STOP_MINING";
     case "HARVEST_BLOCK":
@@ -180,6 +190,25 @@ function toWhole(value: number | null | undefined): string {
     return "unknown";
   }
   return Math.round(value).toString();
+}
+
+function taskLabel(task: TaskName): string {
+  switch (task) {
+    case "go_home":
+      return "go home";
+    case "follow_owner":
+      return "follow owner";
+    case "eat_if_hungry":
+      return "eat if hungry";
+    case "wander_yard_once":
+      return "wander yard once";
+    case "harvest_one_target":
+      return "harvest one target";
+    case "mine_one_safe_target":
+      return "mine one safe target";
+    default:
+      return task;
+  }
 }
 
 const ORE_NAMES = new Set<string>([
@@ -263,6 +292,45 @@ export function createActionController(
   let harvestCancelled = false;
   let harvestTargetName: string | null = null;
   let harvestTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let taskRunToken = 0;
+  let taskStopRequested = false;
+
+  function setTaskState(next: TaskState): void {
+    state.setTaskState(next);
+    state.addEvent("state_update", "Task state updated", next);
+  }
+
+  function updateTaskState(partial: Partial<TaskState>): void {
+    setTaskState({
+      ...state.state.task,
+      ...partial
+    });
+  }
+
+  function startTask(task: TaskName, requestedBy: string): void {
+    taskRunToken += 1;
+    taskStopRequested = false;
+    updateTaskState({
+      active: true,
+      name: task,
+      requestedBy,
+      startedAt: nowIso(),
+      endedAt: null,
+      status: "running",
+      lastResult: null
+    });
+    logger.log("action", `task start name=${task} requestedBy=${requestedBy}`);
+  }
+
+  function finishTask(status: TaskState["status"], result: string): void {
+    updateTaskState({
+      active: false,
+      endedAt: nowIso(),
+      status,
+      lastResult: result
+    });
+    logger.log("action", `task finish status=${status} result=${result}`);
+  }
 
   function getHomePositionVector(): Vec3 | null {
     if (state.state.homeRecord) {
@@ -986,11 +1054,38 @@ export function createActionController(
 
     const safeAction = decision.action ?? action;
     if (safeAction.type === "STOP_MOVING" || safeAction.type === "STOP_WANDER") {
+      taskStopRequested = true;
       stopMiningNow(`requested-by-${requestedBy}`);
       stopHarvestNow(`requested-by-${requestedBy}`);
       clearMovementActions("stop-immediate");
+      clearTaskActions("stop-immediate");
       movement.stop("stop command");
+      if (state.state.task.active) {
+        finishTask("stopped", "Stopped by owner command.");
+      }
       chat.send("Stopped.", "stop");
+      return;
+    }
+
+    if (safeAction.type === "STOP_TASK") {
+      taskStopRequested = true;
+      taskRunToken += 1;
+      stopMiningNow(`requested-by-${requestedBy}`);
+      stopHarvestNow(`requested-by-${requestedBy}`);
+      clearMovementActions("task-stop-immediate");
+      clearTaskActions("task-stop-immediate");
+      movement.stop("task stop command");
+      if (state.state.task.active) {
+        finishTask("stopped", "Task stopped by owner command.");
+        chat.send("Task stopped.", "task-stop");
+      } else {
+        updateTaskState({
+          status: "stopped",
+          endedAt: nowIso(),
+          lastResult: "No active task to stop."
+        });
+        chat.send("No active task to stop.", "task-stop-none");
+      }
       return;
     }
 
@@ -1059,6 +1154,30 @@ export function createActionController(
     }
   }
 
+  function clearTaskActions(reason: string): void {
+    const kept: ActionQueueItem[] = [];
+    let removed = 0;
+
+    for (const item of queue) {
+      if (TASK_ACTION_TYPES.has(item.action.type)) {
+        removed += 1;
+        continue;
+      }
+      kept.push(item);
+    }
+
+    queue.splice(0, queue.length, ...kept);
+    syncQueueState();
+
+    if (removed > 0) {
+      logger.log("action", `task actions cleared reason=${reason} removed=${removed}`);
+      state.addEvent("state_update", "Task actions cleared", {
+        reason,
+        removed
+      });
+    }
+  }
+
   async function processQueue(): Promise<void> {
     if (running) return;
 
@@ -1108,6 +1227,23 @@ export function createActionController(
     }
   }
 
+  async function runSubActionForTask(
+    parent: ActionQueueItem,
+    action: BotAction,
+    token: number
+  ): Promise<boolean> {
+    if (taskStopRequested || token !== taskRunToken) {
+      return false;
+    }
+
+    return runAction({
+      id: parent.id,
+      createdAt: parent.createdAt,
+      requestedBy: parent.requestedBy,
+      action
+    });
+  }
+
   async function runAction(item: ActionQueueItem): Promise<boolean> {
     const { action } = item;
 
@@ -1149,6 +1285,94 @@ export function createActionController(
         movement.stopWander("stop command");
         chat.send("Stopped.", "stop");
         return true;
+      }
+
+      case "STOP_TASK": {
+        taskStopRequested = true;
+        taskRunToken += 1;
+        stopMiningNow("stop-task-action");
+        stopHarvestNow("stop-task-action");
+        clearMovementActions("stop-task-action");
+        clearTaskActions("stop-task-action");
+        movement.stop("task stop action");
+        if (state.state.task.active) {
+          finishTask("stopped", "Task stopped by command.");
+          chat.send("Task stopped.", "task-stop");
+        } else {
+          updateTaskState({
+            status: "stopped",
+            endedAt: nowIso(),
+            lastResult: "No active task to stop."
+          });
+          chat.send("No active task to stop.", "task-stop-none");
+        }
+        return true;
+      }
+
+      case "START_TASK": {
+        if (!config.enableTaskSystem) {
+          chat.send("Task system is disabled by safety settings.", "task-disabled");
+          return false;
+        }
+
+        if (state.state.task.active) {
+          chat.send("A task is already running.", "task-already-running");
+          return false;
+        }
+
+        const task = action.task;
+        startTask(task, item.requestedBy);
+        const token = taskRunToken;
+        const label = taskLabel(task);
+        chat.send(`Task started: ${label}.`, "task-start");
+
+        if (task === "eat_if_hungry" && state.state.food !== null && state.state.food >= 20) {
+          finishTask("completed", "I am not hungry.");
+          chat.send("Task complete: I am not hungry.", "task-eat-not-hungry");
+          return true;
+        }
+
+        let mappedAction: BotAction;
+        switch (task) {
+          case "go_home":
+            mappedAction = { type: "GO_HOME" };
+            break;
+          case "follow_owner":
+            mappedAction = { type: "FOLLOW_OWNER" };
+            break;
+          case "eat_if_hungry":
+            mappedAction = { type: "EAT_FOOD" };
+            break;
+          case "wander_yard_once":
+            mappedAction = { type: "WANDER_SAFE", center: "home" };
+            break;
+          case "harvest_one_target":
+            mappedAction = { type: "HARVEST_BLOCK", mode: "front" };
+            break;
+          case "mine_one_safe_target":
+            mappedAction = { type: "MINE_BLOCK", mode: "front" };
+            break;
+          default:
+            finishTask("failed", `Unsupported task: ${task}`);
+            chat.send("Task failed: unsupported task.", "task-unsupported");
+            return false;
+        }
+
+        const success = await runSubActionForTask(item, mappedAction, token);
+        if (taskStopRequested || token !== taskRunToken) {
+          finishTask("stopped", "Task stopped.");
+          return false;
+        }
+
+        if (success) {
+          finishTask("completed", `Completed ${label}.`);
+          chat.send(`Task complete: ${label}.`, "task-complete");
+          return true;
+        }
+
+        finishTask("failed", `Failed ${label}.`);
+        chat.send(`Task failed: ${label}.`, "task-failed");
+        return false;
       }
 
       case "RESPAWN": {
@@ -1305,7 +1529,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: task go home/follow owner/eat if hungry/wander once/harvest once/mine once, task report, task stop, target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -1383,12 +1607,27 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_TASK": {
+        const task = state.state.task;
+        const name = task.name ? taskLabel(task.name) : "none";
+        const started = task.startedAt ?? "none";
+        const ended = task.endedAt ?? "none";
+        const requestedBy = task.requestedBy ?? "none";
+        const result = task.lastResult ?? "none";
+        const enabledText = config.enableTaskSystem ? "enabled" : "disabled";
+        chat.send(
+          `Task system=${enabledText}. Task: status=${task.status}, active=${String(task.active)}, name=${name}, by=${requestedBy}, started=${started}, ended=${ended}, result=${result}.`,
+          "task-report"
+        );
+        return true;
+      }
+
       case "REPORT_CAPABILITIES": {
         const caps = state.state.capabilities;
         chat.send(
           `Capabilities: movement=${String(caps.movement)}, perception=${String(caps.perception)}, home=${String(
             caps.home
-          )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
+          )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, tasks=${String(caps.tasks)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
             caps.equipment
           )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, harvesting=${String(
             caps.harvesting
@@ -2055,6 +2294,7 @@ export function createActionController(
         const eating = safety.validateAction(item.requestedBy, { type: "EAT_FOOD" }, { dryRun: true });
         const equip = safety.validateAction(item.requestedBy, { type: "EQUIP_ITEM", category: "pickaxe" }, { dryRun: true });
         const wandering = safety.validateAction(item.requestedBy, { type: "WANDER_SAFE", center: "home" }, { dryRun: true });
+        const tasks = safety.validateAction(item.requestedBy, { type: "START_TASK", task: "go_home" }, { dryRun: true });
 
         const miningWord = mining.allowed ? "allowed" : "blocked";
         const harvestingWord = harvesting.allowed ? "allowed" : "blocked";
@@ -2066,10 +2306,11 @@ export function createActionController(
         const eatingWord = eating.allowed ? "allowed" : "blocked";
         const equipWord = equip.allowed ? "allowed" : "blocked";
         const wanderingWord = wandering.allowed ? "allowed" : "blocked";
+        const tasksWord = tasks.allowed ? "allowed" : "blocked";
         const aiWord = config.enableAiBridge ? "allowed" : "blocked";
         const inventoryReadWord = "allowed";
 
-        const result = `Safety test: eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
+        const result = `Safety test: tasks ${tasksWord}, eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
@@ -2081,7 +2322,8 @@ export function createActionController(
           inventory,
           eating,
           equip,
-          wandering
+          wandering,
+          tasks
         });
         chat.send(result, "safety-test");
         return true;

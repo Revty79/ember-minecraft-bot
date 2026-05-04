@@ -11,6 +11,8 @@ const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
 const EQUIP_ACTIONS = new Set<BotAction["type"]>(["EQUIP_ITEM"]);
 const FLEE_ACTIONS = new Set<BotAction["type"]>(["FLEE_DANGER"]);
 const WANDER_ACTIONS = new Set<BotAction["type"]>(["WANDER_SAFE"]);
+const TASK_ACTIONS = new Set<BotAction["type"]>(["START_TASK", "STOP_TASK", "REPORT_TASK"]);
+const TASK_START_ACTIONS = new Set<BotAction["type"]>(["START_TASK"]);
 const WANDER_BLOCKED_ACTIONS = new Set<BotAction["type"]>([
   "MINE_BLOCK",
   "HARVEST_BLOCK",
@@ -61,9 +63,12 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_HARVEST_REPORT",
     "REPORT_YARD_STATUS",
     "REPORT_YARD_CHECK",
+    "REPORT_TASK",
     "REPORT_BLOCK",
     "REPORT_ORES_NEARBY",
-    "REPORT_ORE_REPORT"
+    "REPORT_ORE_REPORT",
+    "START_TASK",
+    "STOP_TASK"
   ]);
 
   function isOwner(username: string): boolean {
@@ -154,6 +159,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Wandering is disabled by safety settings.", requestor, action);
     }
 
+    if (!config.enableTaskSystem && TASK_START_ACTIONS.has(action.type)) {
+      return reject("Task system is disabled by safety settings.", requestor, action);
+    }
+
     return { allowed: true, action };
   }
 
@@ -186,6 +195,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
 
     if (config.wanderOwnerOnly && action.type === "WANDER_SAFE" && !isOwner(requestor)) {
       return reject("Only owner can run wandering actions.", requestor, action);
+    }
+
+    if (config.taskOwnerOnly && TASK_ACTIONS.has(action.type) && !isOwner(requestor)) {
+      return reject("Only owner can run task actions.", requestor, action);
     }
 
     if (state.state.movement.mode === "wander" && WANDER_BLOCKED_ACTIONS.has(action.type)) {

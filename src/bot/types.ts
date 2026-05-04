@@ -157,6 +157,7 @@ export interface CapabilitySummary {
   home: boolean;
   flee: boolean;
   wandering: boolean;
+  tasks: boolean;
   inventoryRead: boolean;
   equipment: boolean;
   eating: boolean;
@@ -191,6 +192,28 @@ export interface PerceptionSnapshot {
 }
 
 export type MovementMode = "idle" | "come" | "follow" | "home" | "flee" | "wander";
+
+export type TaskName =
+  | "go_home"
+  | "follow_owner"
+  | "eat_if_hungry"
+  | "wander_yard_once"
+  | "harvest_one_target"
+  | "mine_one_safe_target";
+
+export type TaskStatus = "idle" | "running" | "completed" | "failed" | "stopped";
+
+export interface TaskState {
+  enabled: boolean;
+  ownerOnly: boolean;
+  active: boolean;
+  name: TaskName | null;
+  requestedBy: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  status: TaskStatus;
+  lastResult: string | null;
+}
 
 export interface MovementState {
   mode: MovementMode;
@@ -250,6 +273,7 @@ export interface BotState {
   currentGoal: string | null;
   currentAction: string | null;
   movement: MovementState;
+  task: TaskState;
   lastError: string | null;
   lastDeathTimestamp: string | null;
   lastChatTimestamp: string | null;
@@ -334,8 +358,11 @@ export type BotAction =
   | { type: "REPORT_HARVEST_REPORT" }
   | { type: "REPORT_YARD_STATUS" }
   | { type: "REPORT_YARD_CHECK" }
+  | { type: "REPORT_TASK" }
   | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
+  | { type: "START_TASK"; task: TaskName }
+  | { type: "STOP_TASK" }
   | { type: "WANDER_SAFE"; center?: "home" }
   | { type: "STOP_WANDER" }
   | { type: "MINE_BLOCK"; blockName?: string; mode?: "front" | "ore" }
@@ -491,6 +518,7 @@ export interface StateStore {
     endsAt: string | null;
     lastStopReason: string | null;
   }) => void;
+  setTaskState: (task: TaskState) => void;
   setFollowTarget: (target: string | null) => void;
   setLastError: (message: string | null) => void;
   setLastDeathTimestamp: (isoTimestamp: string | null) => void;
