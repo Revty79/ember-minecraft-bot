@@ -119,6 +119,11 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember wander stop") {
+      queueOwnerOnlyCommand(username, { type: "STOP_WANDER" }, "wander-stop");
+      return;
+    }
+
     if (normalized === "ember respawn") {
       queueOwnerOnlyCommand(username, { type: "RESPAWN" }, "respawn");
       return;
@@ -131,6 +136,26 @@ export function createCommandRouter(
 
     if (normalized === "ember stay home") {
       queueOwnerOnlyCommand(username, { type: "SET_STAY_HOME" }, "stay-home");
+      return;
+    }
+
+    if (normalized === "ember wander home") {
+      queueOwnerOnlyCommand(username, { type: "WANDER_SAFE", center: "home" }, "wander-home");
+      return;
+    }
+
+    if (normalized === "ember wander") {
+      queueOwnerOnlyCommand(username, { type: "WANDER_SAFE" }, "wander");
+      return;
+    }
+
+    if (normalized === "ember yard status") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_YARD_STATUS" }, "yard-status");
+      return;
+    }
+
+    if (normalized === "ember yard check") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_YARD_CHECK" }, "yard-check");
       return;
     }
 

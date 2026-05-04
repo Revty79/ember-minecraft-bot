@@ -36,8 +36,10 @@ const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
   "GO_HOME",
   "SET_STAY_HOME",
   "FLEE_DANGER",
+  "WANDER_SAFE",
   "MINE_BLOCK",
   "HARVEST_BLOCK",
+  "STOP_WANDER",
   "STOP_MINING",
   "STOP_HARVEST",
   "LOOK_AT_OWNER"
@@ -103,8 +105,12 @@ function describeAction(action: BotAction): string {
       return "SET_STAY_HOME";
     case "FLEE_DANGER":
       return "FLEE_DANGER";
+    case "WANDER_SAFE":
+      return "WANDER_SAFE";
     case "MINE_BLOCK":
       return "MINE_BLOCK";
+    case "STOP_WANDER":
+      return "STOP_WANDER";
     case "STOP_MINING":
       return "STOP_MINING";
     case "HARVEST_BLOCK":
@@ -289,7 +295,7 @@ export function createActionController(
     return home.distanceTo(position) <= config.homeProtectionRadius;
   }
 
-  function getTargetBlockFromView(maxDistance: number): TargetBlockInfo | null {
+  function getTargetBlockFromView(maxDistance: number, includePassable = false): TargetBlockInfo | null {
     if (!isFinitePosition(bot.entity?.position)) {
       return null;
     }
@@ -297,7 +303,11 @@ export function createActionController(
     const fromCursor = bot.blockAtCursor(maxDistance);
     if (fromCursor) {
       const classification = perception.classifyBlock(fromCursor.name);
-      if (classification !== "air" && classification !== "passable" && classification !== "fluid") {
+      if (
+        classification !== "air" &&
+        classification !== "fluid" &&
+        (includePassable || classification !== "passable")
+      ) {
         return {
           block: fromCursor,
           name: fromCursor.name.toLowerCase(),
@@ -317,7 +327,7 @@ export function createActionController(
       const block = bot.blockAt(new Vec3(candidate.x, candidate.y, candidate.z));
       if (!block) continue;
       const classification = perception.classifyBlock(block.name);
-      if (classification === "air" || classification === "passable" || classification === "fluid") continue;
+      if (classification === "air" || classification === "fluid" || (!includePassable && classification === "passable")) continue;
       return {
         block,
         name: block.name.toLowerCase(),
@@ -325,6 +335,75 @@ export function createActionController(
         distance: bot.entity.position.distanceTo(block.position),
         classification
       };
+    }
+
+    return null;
+  }
+
+  function getPassableFrontTarget(maxDistance: number): TargetBlockInfo | null {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return null;
+    }
+
+    const candidates: TargetBlockInfo[] = [];
+    const obstacle = perception.getImmediateObstacles();
+    const directCandidates = [
+      obstacle.blockFrontFeet.position,
+      obstacle.blockFrontHead.position,
+      obstacle.blockAtFeet.position
+    ].filter((entry): entry is { x: number; y: number; z: number } => entry !== null);
+
+    for (const entry of directCandidates) {
+      const block = bot.blockAt(new Vec3(entry.x, entry.y, entry.z));
+      if (!block) continue;
+      const name = block.name.toLowerCase();
+      if (!HARVEST_GRASS_BLOCKS.has(name) && !config.harvestAllowedBlocks.includes(name)) continue;
+      candidates.push({
+        block,
+        name,
+        position: block.position,
+        distance: bot.entity.position.distanceTo(block.position),
+        classification: perception.classifyBlock(name)
+      });
+    }
+
+    const around = Math.max(1, Math.min(Math.floor(maxDistance), 2));
+    const center = bot.entity.position.floored();
+    for (let dx = -around; dx <= around; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dz = -around; dz <= around; dz += 1) {
+          const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+          const block = bot.blockAt(pos);
+          if (!block) continue;
+          const name = block.name.toLowerCase();
+          if (!HARVEST_GRASS_BLOCKS.has(name) && !config.harvestAllowedBlocks.includes(name)) continue;
+          candidates.push({
+            block,
+            name,
+            position: block.position,
+            distance: bot.entity.position.distanceTo(block.position),
+            classification: perception.classifyBlock(name)
+          });
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
+    return candidates[0] ?? null;
+  }
+
+  function getHarvestTarget(mode: "front" | "grass" | "crop"): TargetBlockInfo | null {
+    const direct = getTargetBlockFromView(config.blockTargetRaycastDistance);
+    if (direct) {
+      return direct;
+    }
+
+    if (mode === "front" || mode === "grass") {
+      return getPassableFrontTarget(config.blockTargetRaycastDistance);
     }
 
     return null;
@@ -598,7 +677,7 @@ export function createActionController(
     if (mode === "grass" && !HARVEST_GRASS_BLOCKS.has(target.name)) {
       return {
         allowed: false,
-        reason: "Harvest grass only works on grass, tall_grass, or fern.",
+        reason: "Harvest grass only works on short_grass, grass, tall_grass, or fern.",
         code: "grass-mode-mismatch"
       };
     }
@@ -801,6 +880,56 @@ export function createActionController(
     return { harvestable: true, reason: "allowed" };
   }
 
+  function getHomeCenterSnapshot(): { x: number; y: number; z: number } | null {
+    if (state.state.homeRecord) {
+      return {
+        x: state.state.homeRecord.x,
+        y: state.state.homeRecord.y,
+        z: state.state.homeRecord.z
+      };
+    }
+    return state.state.homePosition ? { ...state.state.homePosition } : null;
+  }
+
+  function getYardCheckSummary(): {
+    homeSet: boolean;
+    insideRadius: boolean | null;
+    danger: "none" | "nearby";
+    health: "okay" | "low";
+    food: "okay" | "low";
+    terrain: "safe" | "unsafe" | "unknown";
+  } {
+    const home = getHomeCenterSnapshot();
+    const insideRadius = home ? movement.isInsideYardRadius() : null;
+    const danger = perception.getDangerSummary(config.hostileDangerRadius);
+    state.setDangerSummary(danger);
+
+    const healthLow =
+      Number.isFinite(bot.health) && bot.health <= config.wanderLowHealthThreshold;
+    const foodLow =
+      state.state.food !== null &&
+      Number.isFinite(state.state.food) &&
+      state.state.food <= config.wanderLowFoodThreshold;
+
+    const obstacle = perception.getImmediateObstacles();
+    const terrainUnsafe =
+      obstacle.fluidAtFeet !== null ||
+      obstacle.fluidFrontFeet !== null ||
+      obstacle.fluidFrontStepDown !== null ||
+      state.state.inLava === true;
+    const terrain =
+      !isFinitePosition(bot.entity?.position) ? "unknown" : terrainUnsafe ? "unsafe" : "safe";
+
+    return {
+      homeSet: Boolean(home),
+      insideRadius,
+      danger: danger.proximity === "none" ? "none" : "nearby",
+      health: healthLow ? "low" : "okay",
+      food: foodLow ? "low" : "okay",
+      terrain
+    };
+  }
+
   function getActionQueueSummary(): ActionQueueSummary {
     return {
       queued: queue.length,
@@ -827,6 +956,15 @@ export function createActionController(
     }
 
     const safeAction = decision.action ?? action;
+    if (safeAction.type === "STOP_MOVING" || safeAction.type === "STOP_WANDER") {
+      stopMiningNow(`requested-by-${requestedBy}`);
+      stopHarvestNow(`requested-by-${requestedBy}`);
+      clearMovementActions("stop-immediate");
+      movement.stop("stop command");
+      chat.send("Stopped.", "stop");
+      return;
+    }
+
     if (safeAction.type === "STOP_MINING") {
       stopMiningNow(`requested-by-${requestedBy}`);
       clearMovementActions("stop-mining");
@@ -978,6 +1116,12 @@ export function createActionController(
         return true;
       }
 
+      case "STOP_WANDER": {
+        movement.stopWander("stop command");
+        chat.send("Stopped.", "stop");
+        return true;
+      }
+
       case "RESPAWN": {
         return movement.tryRespawn(item.requestedBy);
       }
@@ -1004,6 +1148,10 @@ export function createActionController(
 
       case "FLEE_DANGER": {
         return movement.startFleeFromDanger(item.requestedBy);
+      }
+
+      case "WANDER_SAFE": {
+        return movement.startWanderSafe(item.requestedBy, action.center);
       }
 
       case "RECOVER": {
@@ -1128,7 +1276,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -1211,7 +1359,7 @@ export function createActionController(
         chat.send(
           `Capabilities: movement=${String(caps.movement)}, perception=${String(caps.perception)}, home=${String(
             caps.home
-          )}, flee=${String(caps.flee)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
+          )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
             caps.equipment
           )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, harvesting=${String(
             caps.harvesting
@@ -1295,6 +1443,37 @@ export function createActionController(
             stayHome
           )}.`,
           "movement"
+        );
+        return true;
+      }
+
+      case "REPORT_YARD_STATUS": {
+        const home = getHomeCenterSnapshot();
+        const distanceFromHome = movement.getDistanceToHome();
+        const inside = movement.isInsideYardRadius();
+        const homeText = home
+          ? `(${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)})`
+          : "not set";
+        const distanceText = distanceFromHome === null ? "unavailable" : distanceFromHome.toFixed(1);
+        const insideText = inside === null ? "unknown" : inside ? "yes" : "no";
+
+        chat.send(
+          `Yard: home=${homeText}, radius=${config.wanderRadius.toFixed(1)}, distance=${distanceText}, inside=${insideText}, wanderingEnabled=${String(
+            config.allowWander
+          )}, active=${String(state.state.movement.wanderActive)}.`,
+          "yard-status"
+        );
+        return true;
+      }
+
+      case "REPORT_YARD_CHECK": {
+        const yard = getYardCheckSummary();
+        const homeText = yard.homeSet ? "yes" : "no";
+        const insideText = yard.insideRadius === null ? "unknown" : yard.insideRadius ? "yes" : "no";
+
+        chat.send(
+          `Yard check: home set=${homeText}, inside radius=${insideText}, danger=${yard.danger}, health=${yard.health}, food=${yard.food}, terrain=${yard.terrain}.`,
+          "yard-check"
         );
         return true;
       }
@@ -1599,7 +1778,9 @@ export function createActionController(
       }
 
       case "REPORT_TARGET": {
-        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        const target =
+          getTargetBlockFromView(config.blockTargetRaycastDistance) ??
+          getPassableFrontTarget(config.blockTargetRaycastDistance);
         if (!target) {
           chat.send("No solid target block in range.", "target-none");
           return true;
@@ -1678,7 +1859,7 @@ export function createActionController(
       }
 
       case "REPORT_HARVEST_REPORT": {
-        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        const target = getHarvestTarget("front");
         const harvestPreview = getHarvestPreview(target);
         const allowedList = config.harvestAllowedBlocks.slice(0, 10).join(", ");
         const harvestEnabled = config.allowHarvest ? "enabled" : "disabled";
@@ -1714,7 +1895,7 @@ export function createActionController(
         }
 
         const mode = action.mode ?? "front";
-        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        const target = getHarvestTarget(mode);
         if (!target) {
           chat.send("No harvestable target block in range.", "harvest-no-target");
           return false;
@@ -1840,6 +2021,7 @@ export function createActionController(
         const inventory = safety.validateAction(item.requestedBy, { type: "OPEN_INVENTORY" }, { dryRun: true });
         const eating = safety.validateAction(item.requestedBy, { type: "EAT_FOOD" }, { dryRun: true });
         const equip = safety.validateAction(item.requestedBy, { type: "EQUIP_ITEM", category: "pickaxe" }, { dryRun: true });
+        const wandering = safety.validateAction(item.requestedBy, { type: "WANDER_SAFE", center: "home" }, { dryRun: true });
 
         const miningWord = mining.allowed ? "allowed" : "blocked";
         const harvestingWord = harvesting.allowed ? "allowed" : "blocked";
@@ -1850,10 +2032,11 @@ export function createActionController(
         const inventoryWord = inventory.allowed ? "allowed" : "blocked";
         const eatingWord = eating.allowed ? "allowed" : "blocked";
         const equipWord = equip.allowed ? "allowed" : "blocked";
+        const wanderingWord = wandering.allowed ? "allowed" : "blocked";
         const aiWord = config.enableAiBridge ? "allowed" : "blocked";
         const inventoryReadWord = "allowed";
 
-        const result = `Safety test: eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
+        const result = `Safety test: eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
@@ -1864,7 +2047,8 @@ export function createActionController(
           crafting,
           inventory,
           eating,
-          equip
+          equip,
+          wandering
         });
         chat.send(result, "safety-test");
         return true;

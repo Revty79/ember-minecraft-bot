@@ -23,10 +23,13 @@ export interface AppConfig {
   allowFlee: boolean;
   allowHarvest: boolean;
   allowCropHarvest: boolean;
+  allowWander: boolean;
   replantCrops: boolean;
   requireMatureCrops: boolean;
   mineOwnerOnly: boolean;
   harvestOwnerOnly: boolean;
+  wanderOwnerOnly: boolean;
+  wanderCenterMode: "home";
   profilesFolder: string;
 
   maxComeDistance: number;
@@ -68,6 +71,23 @@ export interface AppConfig {
   harvestForbiddenBlocks: string[];
   minePreviewMaxDistance: number;
   blockTargetRaycastDistance: number;
+  wanderRadius: number;
+  wanderMaxDurationMs: number;
+  wanderStepRadius: number;
+  wanderPauseMs: number;
+  wanderMaxSteps: number;
+  wanderStopOnDanger: boolean;
+  wanderStopOnLowHealth: boolean;
+  wanderLowHealthThreshold: number;
+  wanderStopOnLowFood: boolean;
+  wanderLowFoodThreshold: number;
+  wanderAllowMining: boolean;
+  wanderAllowHarvest: boolean;
+  wanderAllowCombat: boolean;
+  wanderAllowBuilding: boolean;
+  wanderAllowContainers: boolean;
+  wanderRequireHome: boolean;
+  wanderRespectHomeProtection: boolean;
 
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
@@ -163,10 +183,17 @@ export function loadConfig(): AppConfig {
   const allowFlee = readBoolean("ALLOW_FLEE", true);
   const allowHarvest = readBoolean("ALLOW_HARVEST", false);
   const allowCropHarvest = readBoolean("ALLOW_CROP_HARVEST", false);
+  const allowWander = readBoolean("ALLOW_WANDER", false);
   const replantCrops = readBoolean("REPLANT_CROPS", false);
   const requireMatureCrops = readBoolean("REQUIRE_MATURE_CROPS", true);
   const mineOwnerOnly = readBoolean("MINE_OWNER_ONLY", true);
   const harvestOwnerOnly = readBoolean("HARVEST_OWNER_ONLY", true);
+  const wanderOwnerOnly = readBoolean("WANDER_OWNER_ONLY", true);
+  const wanderCenterModeRaw = readEnv("WANDER_CENTER_MODE", "home").toLowerCase();
+  if (wanderCenterModeRaw !== "home") {
+    throw new Error(`Invalid WANDER_CENTER_MODE "${wanderCenterModeRaw}". Supported: home`);
+  }
+  const wanderCenterMode: "home" = "home";
 
   const maxComeDistance = readNumber("MAX_COME_DISTANCE", 40, 1);
   const maxFollowStartDistance = readNumber("MAX_FOLLOW_START_DISTANCE", 40, 1);
@@ -247,6 +274,23 @@ export function loadConfig(): AppConfig {
   ]);
   const minePreviewMaxDistance = readNumber("MINE_PREVIEW_MAX_DISTANCE", 5, 1);
   const blockTargetRaycastDistance = readNumber("BLOCK_TARGET_RAYCAST_DISTANCE", 5, 1);
+  const wanderRadius = readNumber("WANDER_RADIUS", 8, 1);
+  const wanderMaxDurationMs = readInteger("WANDER_MAX_DURATION_MS", 30000, 1000);
+  const wanderStepRadius = readNumber("WANDER_STEP_RADIUS", 4, 1);
+  const wanderPauseMs = readInteger("WANDER_PAUSE_MS", 2000, 0);
+  const wanderMaxSteps = readInteger("WANDER_MAX_STEPS", 8, 1);
+  const wanderStopOnDanger = readBoolean("WANDER_STOP_ON_DANGER", true);
+  const wanderStopOnLowHealth = readBoolean("WANDER_STOP_ON_LOW_HEALTH", true);
+  const wanderLowHealthThreshold = readNumber("WANDER_LOW_HEALTH_THRESHOLD", 10, 1);
+  const wanderStopOnLowFood = readBoolean("WANDER_STOP_ON_LOW_FOOD", true);
+  const wanderLowFoodThreshold = readNumber("WANDER_LOW_FOOD_THRESHOLD", 8, 0);
+  const wanderAllowMining = readBoolean("WANDER_ALLOW_MINING", false);
+  const wanderAllowHarvest = readBoolean("WANDER_ALLOW_HARVEST", false);
+  const wanderAllowCombat = readBoolean("WANDER_ALLOW_COMBAT", false);
+  const wanderAllowBuilding = readBoolean("WANDER_ALLOW_BUILDING", false);
+  const wanderAllowContainers = readBoolean("WANDER_ALLOW_CONTAINERS", false);
+  const wanderRequireHome = readBoolean("WANDER_REQUIRE_HOME", true);
+  const wanderRespectHomeProtection = readBoolean("WANDER_RESPECT_HOME_PROTECTION", true);
 
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
@@ -289,10 +333,13 @@ export function loadConfig(): AppConfig {
     allowFlee,
     allowHarvest,
     allowCropHarvest,
+    allowWander,
     replantCrops,
     requireMatureCrops,
     mineOwnerOnly,
     harvestOwnerOnly,
+    wanderOwnerOnly,
+    wanderCenterMode,
     profilesFolder: path.resolve(process.cwd(), "data"),
     maxComeDistance,
     maxFollowStartDistance,
@@ -331,6 +378,23 @@ export function loadConfig(): AppConfig {
     harvestForbiddenBlocks,
     minePreviewMaxDistance,
     blockTargetRaycastDistance,
+    wanderRadius,
+    wanderMaxDurationMs,
+    wanderStepRadius,
+    wanderPauseMs,
+    wanderMaxSteps,
+    wanderStopOnDanger,
+    wanderStopOnLowHealth,
+    wanderLowHealthThreshold,
+    wanderStopOnLowFood,
+    wanderLowFoodThreshold,
+    wanderAllowMining,
+    wanderAllowHarvest,
+    wanderAllowCombat,
+    wanderAllowBuilding,
+    wanderAllowContainers,
+    wanderRequireHome,
+    wanderRespectHomeProtection,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

@@ -10,6 +10,7 @@ const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY"]);
 const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
 const EQUIP_ACTIONS = new Set<BotAction["type"]>(["EQUIP_ITEM"]);
 const FLEE_ACTIONS = new Set<BotAction["type"]>(["FLEE_DANGER"]);
+const WANDER_ACTIONS = new Set<BotAction["type"]>(["WANDER_SAFE"]);
 
 export function createSafetyLayer(config: AppConfig, state: StateStore, logger: Logger): SafetyLayer {
   const actionTimestamps: number[] = [];
@@ -25,6 +26,8 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "GO_HOME",
     "SET_STAY_HOME",
     "FLEE_DANGER",
+    "WANDER_SAFE",
+    "STOP_WANDER",
     "MINE_BLOCK",
     "STOP_MINING",
     "HARVEST_BLOCK",
@@ -48,6 +51,8 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_THREAT",
     "REPORT_TARGET",
     "REPORT_HARVEST_REPORT",
+    "REPORT_YARD_STATUS",
+    "REPORT_YARD_CHECK",
     "REPORT_BLOCK",
     "REPORT_ORES_NEARBY",
     "REPORT_ORE_REPORT"
@@ -137,6 +142,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Flee actions are disabled by policy.", requestor, action);
     }
 
+    if (!config.allowWander && WANDER_ACTIONS.has(action.type)) {
+      return reject("Wandering is disabled by safety settings.", requestor, action);
+    }
+
     return { allowed: true, action };
   }
 
@@ -165,6 +174,21 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       !isOwner(requestor)
     ) {
       return reject("Only owner can run harvesting actions.", requestor, action);
+    }
+
+    if (config.wanderOwnerOnly && action.type === "WANDER_SAFE" && !isOwner(requestor)) {
+      return reject("Only owner can run wandering actions.", requestor, action);
+    }
+
+    if (
+      state.state.movement.mode === "wander" &&
+      ((action.type === "MINE_BLOCK" && !config.wanderAllowMining) ||
+        (action.type === "HARVEST_BLOCK" && !config.wanderAllowHarvest) ||
+        (action.type === "ATTACK_ENTITY" && !config.wanderAllowCombat) ||
+        (action.type === "PLACE_BLOCK" && !config.wanderAllowBuilding) ||
+        (action.type === "OPEN_INVENTORY" && !config.wanderAllowContainers))
+    ) {
+      return reject("That action is blocked while wandering.", requestor, action);
     }
 
     const capabilityDecision = validateCapabilityFlags(action, requestor);

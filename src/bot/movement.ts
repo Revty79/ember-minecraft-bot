@@ -1,6 +1,6 @@
 ﻿import type { Bot } from "mineflayer";
 import { Movements, goals } from "mineflayer-pathfinder";
-import type { Vec3 } from "vec3";
+import { Vec3 } from "vec3";
 import type { AppConfig } from "../config";
 import { clearHomeRecord, saveHomeRecord } from "./homeStore";
 import { isEntityPositionHealthy, isPositionValid } from "./position";
@@ -73,6 +73,7 @@ export function createMovementController(
   let activeComeGoal: GoalPoint | null = null;
   let activeHomeGoal: GoalPoint | null = null;
   let activeFleeGoal: GoalPoint | null = null;
+  let activeWanderGoal: GoalPoint | null = null;
   let movementTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let respawnTimerActive = false;
   let lastRespawnRequestAt = 0;
@@ -84,6 +85,25 @@ export function createMovementController(
   let progressAnchor: Vec3Snapshot | null = null;
   let lastProgressCheckAt = 0;
   let stayHomeEnabled = false;
+  let wanderSessionId = 0;
+  let wanderStopRequested = false;
+  let wanderActive = false;
+  let wanderSteps = 0;
+  let wanderMaxSteps = 0;
+  let wanderStartedAt: string | null = null;
+  let wanderEndsAt: string | null = null;
+  let wanderLastStopReason: string | null = null;
+
+  function syncWanderState(): void {
+    state.setWanderState({
+      active: wanderActive,
+      steps: wanderSteps,
+      maxSteps: wanderMaxSteps,
+      startedAt: wanderStartedAt,
+      endsAt: wanderEndsAt,
+      lastStopReason: wanderLastStopReason
+    });
+  }
 
   function getMode(): MovementMode {
     return movementMode;
@@ -109,11 +129,19 @@ export function createMovementController(
       activeComeGoal = null;
       activeHomeGoal = null;
       activeFleeGoal = null;
+      activeWanderGoal = null;
       followTarget = null;
       progressAnchor = null;
       lastProgressCheckAt = 0;
       lastFollowRepathAt = 0;
       lastFollowTargetPosition = null;
+      wanderActive = false;
+      wanderStopRequested = true;
+      wanderSteps = 0;
+      wanderMaxSteps = 0;
+      wanderStartedAt = null;
+      wanderEndsAt = null;
+      syncWanderState();
       return;
     }
 
@@ -124,6 +152,15 @@ export function createMovementController(
     state.setMovementLastProgressAt(now);
     progressAnchor = null;
     lastProgressCheckAt = 0;
+    if (mode !== "wander") {
+      wanderActive = false;
+      wanderStopRequested = false;
+      wanderSteps = 0;
+      wanderMaxSteps = 0;
+      wanderStartedAt = null;
+      wanderEndsAt = null;
+      syncWanderState();
+    }
   }
 
   function getPlayerEntityByUsername(usernameToFind: string) {
@@ -151,6 +188,12 @@ export function createMovementController(
       return `FleeGoal(${activeFleeGoal.x.toFixed(1)}, ${activeFleeGoal.y.toFixed(
         1
       )}, ${activeFleeGoal.z.toFixed(1)}, r=${activeFleeGoal.radius.toFixed(1)})`;
+    }
+
+    if (movementMode === "wander" && activeWanderGoal) {
+      return `WanderGoal(${activeWanderGoal.x.toFixed(1)}, ${activeWanderGoal.y.toFixed(
+        1
+      )}, ${activeWanderGoal.z.toFixed(1)}, r=${activeWanderGoal.radius.toFixed(1)})`;
     }
 
     if (movementMode === "follow") {
@@ -181,6 +224,14 @@ export function createMovementController(
     return { ready: true, reason: "ok" };
   }
 
+  function getHomeCenter(): Vec3Snapshot | null {
+    const record = state.state.homeRecord;
+    if (record) {
+      return { x: record.x, y: record.y, z: record.z };
+    }
+    return state.state.homePosition ? { ...state.state.homePosition } : null;
+  }
+
   function getDistanceToOwner(): number | null {
     const readiness = getBotPositionReadiness();
     if (!readiness.ready) return null;
@@ -189,6 +240,20 @@ export function createMovementController(
     if (!ownerEntity || !isFinitePosition(ownerEntity.position)) return null;
 
     return bot.entity.position.distanceTo(ownerEntity.position);
+  }
+
+  function getDistanceToHome(): number | null {
+    const readiness = getBotPositionReadiness();
+    if (!readiness.ready || !isFinitePosition(bot.entity?.position)) return null;
+    const center = getHomeCenter();
+    if (!center) return null;
+    return computeDistance(toSnapshot(bot.entity.position), center);
+  }
+
+  function isInsideYardRadius(): boolean | null {
+    const distance = getDistanceToHome();
+    if (distance === null) return null;
+    return distance <= config.wanderRadius;
   }
 
   function stopPathfinder(reason: string): void {
@@ -208,7 +273,13 @@ export function createMovementController(
     const distance = getDistanceToOwner();
     const distanceLabel = distance === null ? "unavailable" : distance.toFixed(2);
     const goal = getCurrentGoalDescription();
+    if (previousMode === "wander" && !wanderLastStopReason) {
+      wanderLastStopReason = reason;
+    }
     stopPathfinder(reason);
+    if (previousMode === "wander") {
+      syncWanderState();
+    }
     logger.log(
       "move",
       `cleared movement state mode=${previousMode} reason=${reason} goal=${goal} distance=${distanceLabel}`
@@ -358,6 +429,13 @@ export function createMovementController(
     }
     logger.warn("perception", "Obstacle report on stuck stop.", obstacle);
     state.addEvent("obstacle_detected", "Obstacle report captured on stuck limit", obstacle);
+
+    if (movementMode === "wander") {
+      wanderLastStopReason = "stuck";
+      clearMovementState("wander-stuck-limit-reached");
+      chat.send("I got stuck and stopped wandering.", "wander-stuck-limit", { bypassRateLimit: true });
+      return;
+    }
 
     clearMovementState("stuck-limit-reached");
     chat.send("I'm blocked and stopped moving.", "stuck-limit", { bypassRateLimit: true });
@@ -677,6 +755,321 @@ export function createMovementController(
     return null;
   }
 
+  function isFluidName(name: string | null | undefined): boolean {
+    if (!name) return false;
+    return name.includes("water") || name.includes("lava");
+  }
+
+  function classifyName(name: string | null): string {
+    return perception.classifyBlock(name);
+  }
+
+  function isCandidateTerrainSafe(target: Vec3Snapshot): boolean {
+    const feet = bot.blockAt(new Vec3(target.x, target.y, target.z));
+    const head = bot.blockAt(new Vec3(target.x, target.y + 1, target.z));
+    const below = bot.blockAt(new Vec3(target.x, target.y - 1, target.z));
+    const below2 = bot.blockAt(new Vec3(target.x, target.y - 2, target.z));
+
+    const feetName = feet?.name ?? null;
+    const headName = head?.name ?? null;
+    const belowName = below?.name ?? null;
+    const below2Name = below2?.name ?? null;
+
+    if (isFluidName(feetName) || isFluidName(headName) || isFluidName(belowName) || isFluidName(below2Name)) {
+      return false;
+    }
+
+    const feetClass = classifyName(feetName);
+    const headClass = classifyName(headName);
+    const belowClass = classifyName(belowName);
+    const below2Class = classifyName(below2Name);
+
+    const feetPassable = feetClass === "air" || feetClass === "passable";
+    const headPassable = headClass === "air" || headClass === "passable";
+    const belowSolid =
+      belowClass === "solid" ||
+      belowClass === "dirt" ||
+      belowClass === "stone" ||
+      belowClass === "log" ||
+      belowClass === "ore";
+    const below2DropUnsafe = below2Class === "air" || below2Class === "passable" || below2Class === "fluid";
+
+    if (!feetPassable || !headPassable || !belowSolid) {
+      return false;
+    }
+
+    if (below2DropUnsafe && belowClass !== "solid" && belowClass !== "dirt" && belowClass !== "stone") {
+      return false;
+    }
+
+    return true;
+  }
+
+  function pickRandomWanderTarget(center: Vec3Snapshot): GoalPoint | null {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return null;
+    }
+
+    const current = toSnapshot(bot.entity.position);
+    const attempts = 28;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const dx = (Math.random() * 2 - 1) * config.wanderStepRadius;
+      const dz = (Math.random() * 2 - 1) * config.wanderStepRadius;
+      const candidate: Vec3Snapshot = {
+        x: Math.round(current.x + dx),
+        y: Math.round(current.y),
+        z: Math.round(current.z + dz)
+      };
+
+      const fromCenter = computeDistance(candidate, center);
+      if (fromCenter > config.wanderRadius) {
+        continue;
+      }
+
+      const moveDistance = computeDistance(candidate, current);
+      if (moveDistance < 1) {
+        continue;
+      }
+
+      if (!isCandidateTerrainSafe(candidate)) {
+        continue;
+      }
+
+      return {
+        x: candidate.x,
+        y: candidate.y,
+        z: candidate.z,
+        radius: 1.5
+      };
+    }
+
+    return null;
+  }
+
+  function getWanderSafetyStopReason(center: Vec3Snapshot): string | null {
+    if (!state.state.alive) return "not alive";
+    if (!isEntityPositionHealthy(bot) || !isFinitePosition(bot.entity?.position)) return "position not ready";
+
+    if (config.wanderStopOnDanger) {
+      const danger = perception.getDangerSummary(config.hostileDangerRadius);
+      state.setDangerSummary(danger);
+      if (danger.proximity === "close" || danger.proximity === "critical") {
+        return "danger nearby";
+      }
+    }
+
+    if (config.wanderStopOnLowHealth && Number.isFinite(bot.health) && bot.health <= config.wanderLowHealthThreshold) {
+      return "health too low";
+    }
+
+    if (
+      config.wanderStopOnLowFood &&
+      state.state.food !== null &&
+      Number.isFinite(state.state.food) &&
+      state.state.food <= config.wanderLowFoodThreshold
+    ) {
+      return "food too low";
+    }
+
+    const current = toSnapshot(bot.entity.position);
+    if (computeDistance(current, center) > config.wanderRadius) {
+      return "outside yard radius";
+    }
+
+    const obstacle = perception.getImmediateObstacles();
+    if (isFluidName(obstacle.fluidAtFeet) || isFluidName(obstacle.fluidFrontFeet) || isFluidName(obstacle.fluidFrontStepDown)) {
+      return "unsafe terrain";
+    }
+
+    return null;
+  }
+
+  async function moveToWanderGoal(goal: GoalPoint, sessionId: number): Promise<"reached" | "stuck" | "timeout" | "cancelled"> {
+    return new Promise((resolve) => {
+      let finished = false;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      let cancelCheckHandle: ReturnType<typeof setInterval> | null = null;
+
+      const finish = (result: "reached" | "stuck" | "timeout" | "cancelled"): void => {
+        if (finished) return;
+        finished = true;
+        bot.removeListener("goal_reached", onGoalReachedLocal);
+        bot.removeListener("path_reset", onPathResetLocal);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (cancelCheckHandle) clearInterval(cancelCheckHandle);
+        resolve(result);
+      };
+
+      const onGoalReachedLocal = (): void => {
+        finish("reached");
+      };
+
+      const onPathResetLocal = (reason: unknown): void => {
+        if (String(reason) === "stuck") {
+          finish("stuck");
+        }
+      };
+
+      bot.on("goal_reached", onGoalReachedLocal);
+      bot.on("path_reset", onPathResetLocal);
+      bot.pathfinder.setGoal(new goals.GoalNear(goal.x, goal.y, goal.z, goal.radius), false);
+
+      timeoutHandle = setTimeout(() => {
+        finish("timeout");
+      }, Math.min(config.pathfinderTimeoutMs, 12000));
+      timeoutHandle.unref();
+
+      cancelCheckHandle = setInterval(() => {
+        if (sessionId !== wanderSessionId || wanderStopRequested || movementMode !== "wander") {
+          finish("cancelled");
+        }
+      }, 180);
+      cancelCheckHandle.unref();
+    });
+  }
+
+  function stopWander(reason: string): void {
+    wanderStopRequested = true;
+    wanderLastStopReason = reason;
+    clearMovementState(`wander-stop:${reason}`);
+    syncWanderState();
+  }
+
+  async function startWanderSafe(requestor: string, centerOverride?: "home"): Promise<boolean> {
+    if (!safety.isOwner(requestor) && !safety.isPrivilegedRequester(requestor)) {
+      chat.send(`Only ${config.ownerUsername} can issue movement commands.`, "wander-denied");
+      return false;
+    }
+
+    if (!config.allowWander) {
+      chat.send("Wandering is disabled by safety settings.", "wander-disabled");
+      return false;
+    }
+
+    if (movementMode !== "idle") {
+      clearMovementState("switch-to-wander");
+    }
+
+    const readiness = getBotPositionReadiness();
+    if (!readiness.ready || !isFinitePosition(bot.entity?.position)) {
+      logger.warn("move", `wander blocked: ${readiness.reason}`);
+      chat.send("I respawned, but I am not ready to move yet.", "wander-not-ready");
+      return false;
+    }
+
+    const centerMode = centerOverride ?? config.wanderCenterMode;
+    if (centerMode !== "home") {
+      chat.send("I only support home-centered wandering right now.", "wander-center-unsupported");
+      return false;
+    }
+
+    const center = getHomeCenter();
+    if (!center && config.wanderRequireHome) {
+      chat.send("I need a home set before I can wander safely.", "wander-home-required");
+      return false;
+    }
+    if (!center) {
+      chat.send("I need a home set before I can wander safely.", "wander-home-missing");
+      return false;
+    }
+
+    const current = toSnapshot(bot.entity.position);
+    const currentDistance = computeDistance(current, center);
+    if (currentDistance > config.wanderRadius) {
+      chat.send("I am outside my yard radius. Tell me to go home first.", "wander-outside-yard");
+      return false;
+    }
+
+    const safetyReason = getWanderSafetyStopReason(center);
+    if (safetyReason) {
+      chat.send(`Stopped wandering: ${safetyReason}.`, "wander-safety-blocked");
+      return false;
+    }
+
+    wanderSessionId += 1;
+    const sessionId = wanderSessionId;
+    wanderStopRequested = false;
+    wanderActive = true;
+    wanderSteps = 0;
+    wanderMaxSteps = config.wanderMaxSteps;
+    wanderStartedAt = nowIso();
+    wanderEndsAt = new Date(Date.now() + config.wanderMaxDurationMs).toISOString();
+    wanderLastStopReason = null;
+    updateMovementState("wander");
+    syncWanderState();
+    state.setCurrentGoal("Wander near home");
+    state.setMovementGoal(`Wander radius=${config.wanderRadius.toFixed(1)} step=${config.wanderStepRadius.toFixed(1)}`);
+    chat.send("Wandering near home.", "wander-start");
+
+    const startedAtMs = Date.now();
+    while (
+      sessionId === wanderSessionId &&
+      !wanderStopRequested &&
+      movementMode === "wander" &&
+      wanderSteps < config.wanderMaxSteps &&
+      Date.now() - startedAtMs < config.wanderMaxDurationMs
+    ) {
+      const stopReason = getWanderSafetyStopReason(center);
+      if (stopReason) {
+        wanderLastStopReason = stopReason;
+        stopWander(stopReason);
+        chat.send(`Stopped wandering: ${stopReason}.`, "wander-safety-stop");
+        return false;
+      }
+
+      const target = pickRandomWanderTarget(center);
+      if (!target) {
+        wanderLastStopReason = "no safe nearby target";
+        stopWander("no-safe-target");
+        chat.send("Stopped wandering: no safe nearby target.", "wander-no-target");
+        return false;
+      }
+
+      activeWanderGoal = target;
+      state.setMovementGoal(
+        `WanderGoal(${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)}, r=${target.radius.toFixed(1)})`
+      );
+      logger.log("move", `wander step ${wanderSteps + 1}/${config.wanderMaxSteps} target=${target.x},${target.y},${target.z}`);
+
+      const result = await moveToWanderGoal(target, sessionId);
+      if (result === "stuck") {
+        wanderLastStopReason = "stuck";
+        stopWander("stuck");
+        chat.send("I got stuck and stopped wandering.", "wander-stuck");
+        return false;
+      }
+      if (result === "timeout") {
+        wanderLastStopReason = "timeout";
+        stopWander("timeout");
+        chat.send("Stopped wandering: timeout.", "wander-timeout");
+        return false;
+      }
+      if (result === "cancelled") {
+        break;
+      }
+
+      wanderSteps += 1;
+      syncWanderState();
+      if (config.wanderPauseMs > 0) {
+        await sleep(config.wanderPauseMs);
+      }
+    }
+
+    if (wanderStopRequested || sessionId !== wanderSessionId || movementMode !== "wander") {
+      return false;
+    }
+
+    if (Date.now() - startedAtMs >= config.wanderMaxDurationMs || wanderSteps >= config.wanderMaxSteps) {
+      stopWander("completed");
+      chat.send("Finished wandering.", "wander-finished");
+      return true;
+    }
+
+    stopWander("stopped");
+    return false;
+  }
+
   function startFleeFromDanger(requestor: string): boolean {
     const allowChatReply = requestor !== "SYSTEM" && requestor !== "AI";
 
@@ -747,6 +1140,10 @@ export function createMovementController(
       state.addEvent("state_update", "Stay-home mode disabled", {
         reason
       });
+    }
+    if (movementMode === "wander") {
+      stopWander(reason);
+      return;
     }
     clearMovementState(reason);
   }
@@ -882,6 +1279,24 @@ export function createMovementController(
       }
     }
 
+    if (movementMode === "wander" && wanderActive) {
+      const center = getHomeCenter();
+      if (!center) {
+        wanderLastStopReason = "home missing";
+        stopWander("home-missing");
+        chat.send("Stopped wandering: home missing.", "wander-home-missing");
+        return;
+      }
+
+      const stopReason = getWanderSafetyStopReason(center);
+      if (stopReason) {
+        wanderLastStopReason = stopReason;
+        stopWander(stopReason);
+        chat.send(`Stopped wandering: ${stopReason}.`, "wander-safety-stop");
+        return;
+      }
+    }
+
     if (stayHomeEnabled && movementMode === "idle" && isFinitePosition(bot.entity?.position)) {
       const homeRecord = state.state.homeRecord;
       const home = homeRecord
@@ -961,6 +1376,8 @@ export function createMovementController(
     goHome,
     setStayHome,
     startFleeFromDanger,
+    startWanderSafe,
+    stopWander,
     stop,
     stopForDanger,
     tryRespawn,
@@ -971,6 +1388,8 @@ export function createMovementController(
     onGoalReached,
     onPhysicsTick,
     getDistanceToOwner,
+    getDistanceToHome,
+    isInsideYardRadius,
     getCurrentGoalDescription,
     getMode,
     isMoving,

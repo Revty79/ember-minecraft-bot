@@ -156,6 +156,7 @@ export interface CapabilitySummary {
   perception: boolean;
   home: boolean;
   flee: boolean;
+  wandering: boolean;
   inventoryRead: boolean;
   equipment: boolean;
   eating: boolean;
@@ -189,7 +190,7 @@ export interface PerceptionSnapshot {
   dangerSummary: DangerSummary;
 }
 
-export type MovementMode = "idle" | "come" | "follow" | "home" | "flee";
+export type MovementMode = "idle" | "come" | "follow" | "home" | "flee" | "wander";
 
 export interface MovementState {
   mode: MovementMode;
@@ -201,6 +202,12 @@ export interface MovementState {
   lastKnownGoal: string | null;
   timeoutAt: string | null;
   lastProgressAt: string | null;
+  wanderActive: boolean;
+  wanderSteps: number;
+  wanderMaxSteps: number;
+  wanderStartedAt: string | null;
+  wanderEndsAt: string | null;
+  wanderLastStopReason: string | null;
 }
 
 export interface SafetyFlags {
@@ -213,6 +220,7 @@ export interface SafetyFlags {
   allowFlee: boolean;
   allowHarvest: boolean;
   allowCropHarvest: boolean;
+  allowWander: boolean;
 }
 
 export interface BotState {
@@ -324,8 +332,12 @@ export type BotAction =
   | { type: "REPORT_ORES_NEARBY" }
   | { type: "REPORT_ORE_REPORT" }
   | { type: "REPORT_HARVEST_REPORT" }
+  | { type: "REPORT_YARD_STATUS" }
+  | { type: "REPORT_YARD_CHECK" }
   | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
+  | { type: "WANDER_SAFE"; center?: "home" }
+  | { type: "STOP_WANDER" }
   | { type: "MINE_BLOCK"; blockName?: string; mode?: "front" | "ore" }
   | { type: "STOP_MINING" }
   | { type: "HARVEST_BLOCK"; mode?: "front" | "grass" | "crop" }
@@ -400,6 +412,27 @@ export interface AiObservation {
       enabled: boolean;
       homeSet: boolean;
     };
+    yard: {
+      enabled: boolean;
+      centerMode: "home";
+      radius: number;
+      homePosition: Vec3Snapshot | null;
+      distanceFromHome: number | null;
+      insideRadius: boolean | null;
+      safety: {
+        homeSet: boolean;
+        insideRadius: boolean;
+        danger: "none" | "nearby";
+        health: "okay" | "low";
+        food: "okay" | "low";
+        terrain: "safe" | "unsafe" | "unknown";
+      };
+      active: boolean;
+      steps: number;
+      maxSteps: number;
+      endsAt: string | null;
+      lastStopReason: string | null;
+    };
     safetyFlags: SafetyFlags;
   };
   actionQueue: ActionQueueSummary;
@@ -450,6 +483,14 @@ export interface StateStore {
   setMovementTimeoutAt: (timeoutAt: string | null) => void;
   setMovementStartedAt: (startedAt: string | null) => void;
   setMovementLastProgressAt: (timestamp: string | null) => void;
+  setWanderState: (state: {
+    active: boolean;
+    steps: number;
+    maxSteps: number;
+    startedAt: string | null;
+    endsAt: string | null;
+    lastStopReason: string | null;
+  }) => void;
   setFollowTarget: (target: string | null) => void;
   setLastError: (message: string | null) => void;
   setLastDeathTimestamp: (isoTimestamp: string | null) => void;
@@ -497,6 +538,8 @@ export interface MovementController {
   goHome: (requestor: string) => boolean;
   setStayHome: (requestor: string) => boolean;
   startFleeFromDanger: (requestor: string) => boolean;
+  startWanderSafe: (requestor: string, centerOverride?: "home") => Promise<boolean>;
+  stopWander: (reason: string) => void;
   stop: (reason: string) => void;
   stopForDanger: (reason: string) => void;
   tryRespawn: (requestor: string) => boolean;
@@ -507,6 +550,8 @@ export interface MovementController {
   onGoalReached: (goalName: string) => void;
   onPhysicsTick: () => void;
   getDistanceToOwner: () => number | null;
+  getDistanceToHome: () => number | null;
+  isInsideYardRadius: () => boolean | null;
   getCurrentGoalDescription: () => string;
   getMode: () => MovementMode;
   isMoving: () => boolean;

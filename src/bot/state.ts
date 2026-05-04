@@ -34,6 +34,7 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     perception: true,
     home: true,
     flee: config.allowFlee,
+    wandering: config.allowWander,
     inventoryRead: true,
     equipment: config.allowEquip,
     eating: config.allowEating,
@@ -84,7 +85,13 @@ function createInitialState(config: AppConfig): BotState {
       lastPathResetReason: null,
       lastKnownGoal: null,
       timeoutAt: null,
-      lastProgressAt: null
+      lastProgressAt: null,
+      wanderActive: false,
+      wanderSteps: 0,
+      wanderMaxSteps: 0,
+      wanderStartedAt: null,
+      wanderEndsAt: null,
+      wanderLastStopReason: null
     },
     lastError: null,
     lastDeathTimestamp: null,
@@ -99,7 +106,8 @@ function createInitialState(config: AppConfig): BotState {
       allowEquip: config.allowEquip,
       allowFlee: config.allowFlee,
       allowHarvest: config.allowHarvest,
-      allowCropHarvest: config.allowCropHarvest
+      allowCropHarvest: config.allowCropHarvest,
+      allowWander: config.allowWander
     },
     aiBridgeEnabled: config.enableAiBridge,
     aiBridgeUrl: config.enableAiBridge ? config.aiBridgeUrl ?? null : null,
@@ -243,6 +251,22 @@ export function createStateStore(config: AppConfig): StateStore {
     state.movement.lastProgressAt = timestamp;
   }
 
+  function setWanderState(wanderState: {
+    active: boolean;
+    steps: number;
+    maxSteps: number;
+    startedAt: string | null;
+    endsAt: string | null;
+    lastStopReason: string | null;
+  }): void {
+    state.movement.wanderActive = wanderState.active;
+    state.movement.wanderSteps = wanderState.steps;
+    state.movement.wanderMaxSteps = wanderState.maxSteps;
+    state.movement.wanderStartedAt = wanderState.startedAt;
+    state.movement.wanderEndsAt = wanderState.endsAt;
+    state.movement.wanderLastStopReason = wanderState.lastStopReason;
+  }
+
   function setFollowTarget(target: string | null): void {
     state.movement.followTarget = target;
   }
@@ -321,6 +345,7 @@ export function createStateStore(config: AppConfig): StateStore {
     setMovementTimeoutAt,
     setMovementStartedAt,
     setMovementLastProgressAt,
+    setWanderState,
     setFollowTarget,
     setLastError,
     setLastDeathTimestamp,
