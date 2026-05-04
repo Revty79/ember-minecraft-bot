@@ -2,23 +2,24 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.8: controlled eating, equipment awareness, and safe mining foundation**.
+This release is **v0.9: survival polish, safer mining targeting, and controlled harvesting foundation**.
 
-- AI bridge remains optional/stubbed and disabled by default.
-- No autonomous AI behavior is enabled.
-- Mining/combat/building/containers remain locked by default.
+- AI bridge remains optional and disabled by default.
+- No autonomous behavior loops are enabled.
+- Combat/building/containers/crafting remain locked by default.
+- Harvesting exists as single-command scaffolding behind safety flags.
 
-## v0.8 Highlights
+## v0.9 Highlights
 
-- Controlled eating flow with `Ember eat` / `Ember eat force`.
-- Equipment awareness and equip commands (`food/pickaxe/shovel/axe`) behind safety gating.
-- Safe mining foundation with strict owner-only and block safety checks.
-- Ore report now explains why ore is or is not mineable.
-- Home protection radius prevents mining inside home area.
+- Cleaner `Ember vitals` formatting with rounded health/position values.
+- New `Ember target` preview using the same targeting path as front mining.
+- Improved mining refusal reasons for safer live debugging.
+- Enhanced `Ember ore report` with visible ore, mineable-now, and reason summary.
+- Controlled harvest foundation (`harvest front/grass/crop/stop/report`) with strict safety gates.
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill values.
+Copy `.env.example` to `.env` and set values.
 
 ```env
 MINECRAFT_HOST=10.0.0.218
@@ -36,6 +37,7 @@ STATE_LOG_INTERVAL_MS=10000
 STATE_LOG_ONLY_ON_CHANGE=true
 MAX_CHAT_LENGTH=220
 MAX_ACTIONS_PER_MINUTE=20
+
 ALLOW_MINING=false
 ALLOW_COMBAT=false
 ALLOW_BUILDING=false
@@ -43,7 +45,13 @@ ALLOW_INVENTORY=false
 ALLOW_EATING=false
 ALLOW_EQUIP=false
 ALLOW_FLEE=true
+ALLOW_HARVEST=false
+ALLOW_CROP_HARVEST=false
+REQUIRE_MATURE_CROPS=true
+REPLANT_CROPS=false
+
 MINE_OWNER_ONLY=true
+HARVEST_OWNER_ONLY=true
 
 MAX_COME_DISTANCE=40
 MAX_FOLLOW_START_DISTANCE=40
@@ -70,6 +78,13 @@ REQUIRE_TOOL_FOR_ORES=true
 LOW_HEALTH_STOP_THRESHOLD=8
 LOW_FOOD_EAT_THRESHOLD=14
 HOME_PROTECTION_RADIUS=6
+MINE_PREVIEW_MAX_DISTANCE=5
+BLOCK_TARGET_RAYCAST_DISTANCE=5
+
+HARVEST_MAX_DISTANCE=5
+HARVEST_TIMEOUT_MS=10000
+HARVEST_ALLOWED_BLOCKS=grass,fern,tall_grass,wheat,carrots,potatoes,beetroots,pumpkin,melon
+HARVEST_FORBIDDEN_BLOCKS=chest,barrel,furnace,crafting_table,door,trapdoor,bedrock,water,lava,fire
 
 MIN_GOAL_REFRESH_DISTANCE=2
 FOLLOW_REPATH_INTERVAL_MS=1500
@@ -100,6 +115,7 @@ Public-safe:
 
 Owner-only:
 
+- `Ember target`
 - `Ember inventory`
 - `Ember equipment`
 - `Ember food`
@@ -114,6 +130,11 @@ Owner-only:
 - `Ember mine ore`
 - `Ember mine stop`
 - `Ember ore report`
+- `Ember harvest report`
+- `Ember harvest front`
+- `Ember harvest grass`
+- `Ember harvest crop`
+- `Ember harvest stop`
 - `Ember block`
 - `Ember ores nearby`
 - `Ember obstacle`
@@ -135,37 +156,68 @@ Owner-only:
 - `Ember ai status`
 - `Ember action queue`
 
+## Capability Model
+
+`Ember capabilities` reports current enabled state, including:
+
+- movement
+- perception
+- home
+- flee
+- inventoryRead
+- equipment
+- eating
+- mining
+- harvesting
+- cropHarvesting
+- combat
+- building
+- crafting
+- containers
+- ai
+
 ## Safety Rules
 
-Defaults remain locked:
+Defaults stay locked:
 
-- `ALLOW_MINING=false`
 - `ALLOW_COMBAT=false`
 - `ALLOW_BUILDING=false`
 - `ALLOW_INVENTORY=false`
-- `ALLOW_EATING=false`
-- `ALLOW_EQUIP=false`
+- `ALLOW_HARVEST=false`
+- `ALLOW_CROP_HARVEST=false`
+- `REPLANT_CROPS=false`
 
-Notes:
+Important notes:
 
-- Inventory read commands do not open chests/containers.
-- `EAT_FOOD` and `EQUIP_ITEM` are blocked unless explicitly enabled.
-- Mining is owner-commanded only and safety-validated for distance, block allow/deny lists, danger, health, hunger, position validity, and home protection.
-- No autonomous mining loops are enabled.
+- No chest/container interaction.
+- No crafting support.
+- No autonomous mining/harvesting loops.
+- Mining and harvesting remain explicit command actions.
+- Home protection still blocks risky mining near home.
 
-## Mining Guardrails (v0.8)
+## Harvesting (v0.9)
 
-- Mines only explicit owner commands.
-- `mine front`/`mine block` target direct front block.
-- `mine ore` targets nearest visible ore only when safe/simple.
-- Stops mining on timeout, invalid position, danger, or low health.
-- Rejects mining inside `HOME_PROTECTION_RADIUS` around home.
+- `Ember harvest front` breaks one directly targeted safe block.
+- `Ember harvest grass` allows only grass/fern/tall_grass targets.
+- `Ember harvest crop` requires `ALLOW_CROP_HARVEST=true`.
+- If `REQUIRE_MATURE_CROPS=true`, unknown/immature crop age is refused.
+- `REPLANT_CROPS=false` means no replant behavior yet.
 
 ## AI Bridge Stub
 
-- If `ENABLE_AI_BRIDGE=false`, bridge calls are skipped/logged.
-- If `ENABLE_AI_BRIDGE=true`, observations are POSTed to `AI_BRIDGE_URL`.
+- `ENABLE_AI_BRIDGE=false` means observation sends are skipped.
+- If enabled later, observations are POSTed to `AI_BRIDGE_URL`.
 - AI-requested actions still pass safety validation.
+
+Observation snapshot now includes:
+
+- rounded vitals
+- equipment summary
+- food summary
+- mining and harvesting capability summaries
+- visible and mineable ores
+- current target block summary
+- home protection and safety flags
 
 ## Docker
 
@@ -189,3 +241,9 @@ docker compose down
 docker compose up -d --build
 docker logs ember-minecraft-bot --tail 180
 ```
+
+## Known Limitations
+
+- Terrain-limited pathing remains possible because autonomous terrain modification is disabled.
+- Crop maturity detection depends on block state availability.
+- Harvesting is intentionally single-action and command-driven only.

@@ -3,6 +3,7 @@
 export type LogPrefix =
   | "config"
   | "connect"
+  | "recovery"
   | "life"
   | "chat"
   | "command"
@@ -159,8 +160,11 @@ export interface CapabilitySummary {
   equipment: boolean;
   eating: boolean;
   mining: boolean;
+  harvesting: boolean;
+  cropHarvesting: boolean;
   combat: boolean;
   building: boolean;
+  crafting: boolean;
   containers: boolean;
   ai: boolean;
 }
@@ -207,6 +211,8 @@ export interface SafetyFlags {
   allowEating: boolean;
   allowEquip: boolean;
   allowFlee: boolean;
+  allowHarvest: boolean;
+  allowCropHarvest: boolean;
 }
 
 export interface BotState {
@@ -313,15 +319,20 @@ export type BotAction =
   | { type: "REPORT_EQUIPMENT" }
   | { type: "REPORT_FOOD" }
   | { type: "REPORT_MOVEMENT" }
+  | { type: "REPORT_TARGET" }
   | { type: "REPORT_BLOCK" }
   | { type: "REPORT_ORES_NEARBY" }
   | { type: "REPORT_ORE_REPORT" }
+  | { type: "REPORT_HARVEST_REPORT" }
   | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
   | { type: "MINE_BLOCK"; blockName?: string; mode?: "front" | "ore" }
   | { type: "STOP_MINING" }
+  | { type: "HARVEST_BLOCK"; mode?: "front" | "grass" | "crop" }
+  | { type: "STOP_HARVEST" }
   | { type: "ATTACK_ENTITY"; entityName?: string }
   | { type: "PLACE_BLOCK"; blockName?: string }
+  | { type: "CRAFT_ITEM"; itemName?: string }
   | { type: "OPEN_INVENTORY" }
   | { type: "EQUIP_ITEM"; itemName?: string; category?: "food" | "pickaxe" | "shovel" | "axe" }
   | { type: "EAT_FOOD"; itemName?: string; force?: boolean };
@@ -349,6 +360,17 @@ export interface AiObservation {
   bot: BotSnapshot;
   perception: PerceptionSnapshot;
   survival: {
+    vitals: {
+      health: number | null;
+      maxHealth: number;
+      food: number | null;
+      maxFood: number;
+      saturation: number | null;
+      oxygen: number | null;
+      alive: boolean;
+      danger: DangerProximity;
+      position: Vec3Snapshot | null;
+    };
     equipment: EquipmentSummary;
     food: FoodItemSummary[];
     mining: {
@@ -357,13 +379,28 @@ export interface AiObservation {
       forbiddenBlocks: string[];
       maxDistance: number;
       homeProtectionRadius: number;
+      previewMaxDistance: number;
+    };
+    harvesting: {
+      enabled: boolean;
+      cropHarvestingEnabled: boolean;
+      replantEnabled: boolean;
+      allowedBlocks: string[];
+      forbiddenBlocks: string[];
+      maxDistance: number;
     };
     visibleOres: BlockSummary[];
     mineableOres: BlockSummary[];
+    targetBlock: {
+      name: string | null;
+      category: BlockClass | null;
+      distance: number | null;
+    };
     homeProtection: {
       enabled: boolean;
       homeSet: boolean;
     };
+    safetyFlags: SafetyFlags;
   };
   actionQueue: ActionQueueSummary;
   recentEvents: BotEvent[];

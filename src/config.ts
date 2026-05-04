@@ -21,7 +21,12 @@ export interface AppConfig {
   allowEating: boolean;
   allowEquip: boolean;
   allowFlee: boolean;
+  allowHarvest: boolean;
+  allowCropHarvest: boolean;
+  replantCrops: boolean;
+  requireMatureCrops: boolean;
   mineOwnerOnly: boolean;
+  harvestOwnerOnly: boolean;
   profilesFolder: string;
 
   maxComeDistance: number;
@@ -57,6 +62,12 @@ export interface AppConfig {
   lowHealthStopThreshold: number;
   lowFoodEatThreshold: number;
   homeProtectionRadius: number;
+  harvestMaxDistance: number;
+  harvestTimeoutMs: number;
+  harvestAllowedBlocks: string[];
+  harvestForbiddenBlocks: string[];
+  minePreviewMaxDistance: number;
+  blockTargetRaycastDistance: number;
 
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
@@ -150,7 +161,12 @@ export function loadConfig(): AppConfig {
   const allowEating = readBoolean("ALLOW_EATING", false);
   const allowEquip = readBoolean("ALLOW_EQUIP", false);
   const allowFlee = readBoolean("ALLOW_FLEE", true);
+  const allowHarvest = readBoolean("ALLOW_HARVEST", false);
+  const allowCropHarvest = readBoolean("ALLOW_CROP_HARVEST", false);
+  const replantCrops = readBoolean("REPLANT_CROPS", false);
+  const requireMatureCrops = readBoolean("REQUIRE_MATURE_CROPS", true);
   const mineOwnerOnly = readBoolean("MINE_OWNER_ONLY", true);
+  const harvestOwnerOnly = readBoolean("HARVEST_OWNER_ONLY", true);
 
   const maxComeDistance = readNumber("MAX_COME_DISTANCE", 40, 1);
   const maxFollowStartDistance = readNumber("MAX_FOLLOW_START_DISTANCE", 40, 1);
@@ -204,6 +220,33 @@ export function loadConfig(): AppConfig {
   const lowHealthStopThreshold = readNumber("LOW_HEALTH_STOP_THRESHOLD", 8, 1);
   const lowFoodEatThreshold = readNumber("LOW_FOOD_EAT_THRESHOLD", 14, 1);
   const homeProtectionRadius = readNumber("HOME_PROTECTION_RADIUS", 6, 0);
+  const harvestMaxDistance = readNumber("HARVEST_MAX_DISTANCE", 5, 1);
+  const harvestTimeoutMs = readInteger("HARVEST_TIMEOUT_MS", 10000, 1000);
+  const harvestAllowedBlocks = readCsvList("HARVEST_ALLOWED_BLOCKS", [
+    "grass",
+    "fern",
+    "tall_grass",
+    "wheat",
+    "carrots",
+    "potatoes",
+    "beetroots",
+    "pumpkin",
+    "melon"
+  ]);
+  const harvestForbiddenBlocks = readCsvList("HARVEST_FORBIDDEN_BLOCKS", [
+    "chest",
+    "barrel",
+    "furnace",
+    "crafting_table",
+    "door",
+    "trapdoor",
+    "bedrock",
+    "water",
+    "lava",
+    "fire"
+  ]);
+  const minePreviewMaxDistance = readNumber("MINE_PREVIEW_MAX_DISTANCE", 5, 1);
+  const blockTargetRaycastDistance = readNumber("BLOCK_TARGET_RAYCAST_DISTANCE", 5, 1);
 
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
@@ -244,7 +287,12 @@ export function loadConfig(): AppConfig {
     allowEating,
     allowEquip,
     allowFlee,
+    allowHarvest,
+    allowCropHarvest,
+    replantCrops,
+    requireMatureCrops,
     mineOwnerOnly,
+    harvestOwnerOnly,
     profilesFolder: path.resolve(process.cwd(), "data"),
     maxComeDistance,
     maxFollowStartDistance,
@@ -277,6 +325,12 @@ export function loadConfig(): AppConfig {
     lowHealthStopThreshold,
     lowFoodEatThreshold,
     homeProtectionRadius,
+    harvestMaxDistance,
+    harvestTimeoutMs,
+    harvestAllowedBlocks,
+    harvestForbiddenBlocks,
+    minePreviewMaxDistance,
+    blockTargetRaycastDistance,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

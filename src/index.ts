@@ -36,7 +36,9 @@ logger.log(
     config.allowBuilding
   )} allowInventory=${String(config.allowInventory)} allowEating=${String(config.allowEating)} allowEquip=${String(
     config.allowEquip
-  )} allowFlee=${String(config.allowFlee)}`
+  )} allowFlee=${String(config.allowFlee)} allowHarvest=${String(config.allowHarvest)} allowCropHarvest=${String(
+    config.allowCropHarvest
+  )}`
 );
 logger.log(
   "config",
@@ -62,7 +64,17 @@ logger.log(
   "config",
   `mining allowList=${config.miningAllowedBlocks.join(",")} forbidList=${config.miningForbiddenBlocks.join(",")} requireToolStone=${String(
     config.requireToolForStone
-  )} requireToolOres=${String(config.requireToolForOres)}`
+  )} requireToolOres=${String(config.requireToolForOres)} previewMaxDistance=${config.minePreviewMaxDistance} targetRaycast=${config.blockTargetRaycastDistance}`
+);
+logger.log(
+  "config",
+  `harvest ownerOnly=${String(config.harvestOwnerOnly)} maxDistance=${config.harvestMaxDistance} timeoutMs=${config.harvestTimeoutMs} allowCropHarvest=${String(
+    config.allowCropHarvest
+  )} requireMatureCrops=${String(config.requireMatureCrops)} replantCrops=${String(config.replantCrops)}`
+);
+logger.log(
+  "config",
+  `harvest allowList=${config.harvestAllowedBlocks.join(",")} forbidList=${config.harvestForbiddenBlocks.join(",")}`
 );
 logger.log(
   "config",

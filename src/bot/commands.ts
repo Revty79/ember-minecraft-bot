@@ -94,6 +94,11 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember target") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_TARGET" }, "target");
+      return;
+    }
+
     if (normalized === "ember hunger") {
       actions.queueAction(username, { type: "REPORT_HUNGER" });
       return;
@@ -216,6 +221,31 @@ export function createCommandRouter(
 
     if (normalized === "ember ore report") {
       queueOwnerOnlyCommand(username, { type: "REPORT_ORE_REPORT" }, "ore-report");
+      return;
+    }
+
+    if (normalized === "ember harvest report") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_HARVEST_REPORT" }, "harvest-report");
+      return;
+    }
+
+    if (normalized === "ember harvest stop") {
+      queueOwnerOnlyCommand(username, { type: "STOP_HARVEST" }, "harvest-stop");
+      return;
+    }
+
+    if (normalized === "ember harvest front") {
+      queueOwnerOnlyCommand(username, { type: "HARVEST_BLOCK", mode: "front" }, "harvest-front");
+      return;
+    }
+
+    if (normalized === "ember harvest grass") {
+      queueOwnerOnlyCommand(username, { type: "HARVEST_BLOCK", mode: "grass" }, "harvest-grass");
+      return;
+    }
+
+    if (normalized === "ember harvest crop") {
+      queueOwnerOnlyCommand(username, { type: "HARVEST_BLOCK", mode: "crop" }, "harvest-crop");
       return;
     }
 

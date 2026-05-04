@@ -340,10 +340,9 @@ export function createLifecycleController(
 
       if (reasonText.includes("multiplayer.disconnect.chat_validation_failed")) {
         kickedForChatValidation = true;
-        logger.error(
-          "connect",
-          "Detected chat validation failure kick. Quitting so Docker can restart cleanly."
-        );
+        logger.error("connect", "chat validation failure detected");
+        logger.error("connect", "exiting for supervisor restart");
+        logger.error("recovery", "restart expected after chat validation failure");
         actions.clearActionQueue("chat-validation-failed");
         movement.stop("chat-validation-kick");
         bot.quit("chat validation failed");
@@ -362,10 +361,10 @@ export function createLifecycleController(
       });
 
       if (kickedForChatValidation || invalidRecoveryQuitRequested) {
-        logger.error(
-          "connect",
-          "Exiting process so Docker can restart cleanly."
-        );
+        logger.error("connect", "exiting for supervisor restart");
+        if (kickedForChatValidation) {
+          logger.error("recovery", "restart expected after chat validation failure");
+        }
         process.exit(1);
       }
     });

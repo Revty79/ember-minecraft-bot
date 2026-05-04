@@ -17,6 +17,7 @@ import type {
   ActionQueueItem,
   ActionQueueSummary,
   AiBridgeStatus,
+  BlockClass,
   BotAction,
   ChatController,
   DangerSummary,
@@ -36,15 +37,41 @@ const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
   "SET_STAY_HOME",
   "FLEE_DANGER",
   "MINE_BLOCK",
+  "HARVEST_BLOCK",
   "STOP_MINING",
+  "STOP_HARVEST",
   "LOOK_AT_OWNER"
 ]);
 
 const SCAFFOLDED_CAPABILITY_ACTIONS = new Set<BotAction["type"]>([
   "ATTACK_ENTITY",
   "PLACE_BLOCK",
+  "CRAFT_ITEM",
   "OPEN_INVENTORY"
 ]);
+
+const HARVEST_HOME_EXEMPT_BLOCKS = new Set<string>(["grass", "short_grass", "tall_grass", "fern", "large_fern"]);
+const HARVEST_GRASS_BLOCKS = new Set<string>(["grass", "short_grass", "tall_grass", "fern", "large_fern"]);
+const CROP_MATURITY_AGES: Record<string, number> = {
+  wheat: 7,
+  carrots: 7,
+  potatoes: 7,
+  beetroots: 3
+};
+
+type TargetBlockInfo = {
+  block: NonNullable<ReturnType<Bot["blockAt"]>>;
+  name: string;
+  position: Vec3;
+  distance: number;
+  classification: BlockClass;
+};
+
+type ActionValidation = {
+  allowed: boolean;
+  reason: string;
+  code: string;
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -80,6 +107,10 @@ function describeAction(action: BotAction): string {
       return "MINE_BLOCK";
     case "STOP_MINING":
       return "STOP_MINING";
+    case "HARVEST_BLOCK":
+      return "HARVEST_BLOCK";
+    case "STOP_HARVEST":
+      return "STOP_HARVEST";
     case "EQUIP_ITEM":
       return "EQUIP_ITEM";
     case "EAT_FOOD":
@@ -129,6 +160,20 @@ function movementModeLabel(mode: MovementMode, stuckCount: number): string {
   if (mode === "follow") return "following";
   if (mode === "flee") return "fleeing";
   return mode;
+}
+
+function toOneDecimal(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  return value.toFixed(1);
+}
+
+function toWhole(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  return Math.round(value).toString();
 }
 
 const ORE_NAMES = new Set<string>([
@@ -208,6 +253,98 @@ export function createActionController(
   let miningCancelled = false;
   let miningTargetName: string | null = null;
   let miningTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let harvestActive = false;
+  let harvestCancelled = false;
+  let harvestTargetName: string | null = null;
+  let harvestTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  function getHomePositionVector(): Vec3 | null {
+    if (state.state.homeRecord) {
+      return new Vec3(state.state.homeRecord.x, state.state.homeRecord.y, state.state.homeRecord.z);
+    }
+    if (state.state.homePosition) {
+      return new Vec3(state.state.homePosition.x, state.state.homePosition.y, state.state.homePosition.z);
+    }
+    return null;
+  }
+
+  function isBlockAtOwnFeetOrHead(position: Vec3): boolean {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return false;
+    }
+
+    const botFloor = bot.entity.position.floored();
+    return (
+      position.x === botFloor.x &&
+      position.z === botFloor.z &&
+      (position.y === botFloor.y || position.y === botFloor.y + 1)
+    );
+  }
+
+  function isBlockTooNearHome(position: Vec3): boolean {
+    const home = getHomePositionVector();
+    if (!home || config.homeProtectionRadius <= 0) {
+      return false;
+    }
+    return home.distanceTo(position) <= config.homeProtectionRadius;
+  }
+
+  function getTargetBlockFromView(maxDistance: number): TargetBlockInfo | null {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return null;
+    }
+
+    const fromCursor = bot.blockAtCursor(maxDistance);
+    if (fromCursor) {
+      const classification = perception.classifyBlock(fromCursor.name);
+      if (classification !== "air" && classification !== "passable" && classification !== "fluid") {
+        return {
+          block: fromCursor,
+          name: fromCursor.name.toLowerCase(),
+          position: fromCursor.position,
+          distance: bot.entity.position.distanceTo(fromCursor.position),
+          classification
+        };
+      }
+    }
+
+    const obstacle = perception.getImmediateObstacles();
+    const candidates = [obstacle.blockFrontFeet.position, obstacle.blockFrontHead.position].filter(
+      (entry): entry is { x: number; y: number; z: number } => entry !== null
+    );
+
+    for (const candidate of candidates) {
+      const block = bot.blockAt(new Vec3(candidate.x, candidate.y, candidate.z));
+      if (!block) continue;
+      const classification = perception.classifyBlock(block.name);
+      if (classification === "air" || classification === "passable" || classification === "fluid") continue;
+      return {
+        block,
+        name: block.name.toLowerCase(),
+        position: block.position,
+        distance: bot.entity.position.distanceTo(block.position),
+        classification
+      };
+    }
+
+    return null;
+  }
+
+  function summarizeTargetBlock(target: TargetBlockInfo | null): {
+    name: string | null;
+    category: BlockClass | null;
+    distance: number | null;
+  } {
+    if (!target) {
+      return { name: null, category: null, distance: null };
+    }
+
+    return {
+      name: target.name,
+      category: target.classification,
+      distance: target.distance
+    };
+  }
 
   function stopMiningNow(reason: string): void {
     if (!miningActive && !miningTimeoutHandle) return;
@@ -233,6 +370,32 @@ export function createActionController(
     const target = miningTargetName;
     miningTargetName = null;
     logger.warn("action", `mining stopped reason=${reason} target=${target ?? "none"}`);
+  }
+
+  function stopHarvestNow(reason: string): void {
+    if (!harvestActive && !harvestTimeoutHandle) return;
+
+    harvestCancelled = true;
+    if (harvestTimeoutHandle) {
+      clearTimeout(harvestTimeoutHandle);
+      harvestTimeoutHandle = null;
+    }
+    try {
+      bot.stopDigging();
+    } catch {
+      // ignore stopDigging errors
+    }
+    try {
+      bot.pathfinder.stop();
+      bot.pathfinder.setGoal(null);
+    } catch {
+      // ignore pathfinder stop errors
+    }
+    movement.clearMovementState(`harvest-stop:${reason}`);
+    harvestActive = false;
+    const target = harvestTargetName;
+    harvestTargetName = null;
+    logger.warn("action", `harvest stopped reason=${reason} target=${target ?? "none"}`);
   }
 
   function hasDangerForMining(): boolean {
@@ -265,58 +428,197 @@ export function createActionController(
     return false;
   }
 
-  function validateTargetSafety(blockPosition: Vec3, blockName: string): { allowed: boolean; reason?: string } {
+  function isForbiddenByNameHints(name: string): boolean {
+    const normalized = name.toLowerCase();
+    for (const hint of FORBIDDEN_NAME_HINTS) {
+      if (normalized.includes(hint)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function validateMiningTarget(target: TargetBlockInfo): ActionValidation {
     if (!state.state.alive) {
-      return { allowed: false, reason: "I am not alive right now." };
+      return { allowed: false, reason: "I am not alive right now.", code: "not-alive" };
     }
 
     if (!movement.isEntityPositionHealthy() || !isFinitePosition(bot.entity?.position)) {
-      return { allowed: false, reason: "My position is not valid for mining yet." };
+      return { allowed: false, reason: "My position is not valid for mining yet.", code: "position-invalid" };
     }
 
     if (hasDangerForMining()) {
-      return { allowed: false, reason: "It is not safe to mine right now." };
+      return {
+        allowed: false,
+        reason: "I will not mine that block because danger is nearby.",
+        code: "danger-nearby"
+      };
     }
 
     if (hasLowHealthForMining()) {
-      return { allowed: false, reason: "My health is too low for mining." };
+      return {
+        allowed: false,
+        reason: "I will not mine that block because my health is too low.",
+        code: "low-health"
+      };
     }
 
     if (state.state.food !== null && state.state.food < config.lowFoodEatThreshold) {
-      return { allowed: false, reason: "My food is too low for safe mining." };
+      return { allowed: false, reason: "My food is too low for safe mining.", code: "low-food" };
     }
 
-    const distance = bot.entity.position.distanceTo(blockPosition);
-    if (distance > config.miningMaxDistance) {
-      return { allowed: false, reason: "That block is too far away to mine safely." };
+    if (target.distance > config.miningMaxDistance) {
+      return {
+        allowed: false,
+        reason: "I will not mine that block because it is too far away.",
+        code: "too-far"
+      };
     }
 
-    if (!isValidMiningBlockName(blockName)) {
-      return { allowed: false, reason: "That block is not in my safe mining list." };
+    if (!isValidMiningBlockName(target.name)) {
+      return { allowed: false, reason: "That block is not in my safe mining list.", code: "not-allowed-list" };
     }
 
-    const botFloor = bot.entity.position.floored();
-    if (
-      blockPosition.x === botFloor.x &&
-      blockPosition.z === botFloor.z &&
-      (blockPosition.y === botFloor.y || blockPosition.y === botFloor.y + 1 || blockPosition.y < botFloor.y)
-    ) {
-      return { allowed: false, reason: "I will not mine blocks at or below my own position." };
+    if (isBlockAtOwnFeetOrHead(target.position)) {
+      return {
+        allowed: false,
+        reason: "I will not mine that block because it is at my feet/head.",
+        code: "at-feet-or-head"
+      };
     }
 
-    const home = state.state.homeRecord
-      ? new Vec3(state.state.homeRecord.x, state.state.homeRecord.y, state.state.homeRecord.z)
-      : state.state.homePosition
-        ? new Vec3(state.state.homePosition.x, state.state.homePosition.y, state.state.homePosition.z)
-        : null;
-    if (home) {
-      const homeDistance = home.distanceTo(blockPosition);
-      if (homeDistance <= config.homeProtectionRadius) {
-        return { allowed: false, reason: "I will not mine inside my home area yet." };
+    if (isBlockTooNearHome(target.position)) {
+      return { allowed: false, reason: "I will not mine inside my home area yet.", code: "home-protected" };
+    }
+
+    return { allowed: true, reason: "allowed", code: "allowed" };
+  }
+
+  function isHarvestAllowedByName(name: string): boolean {
+    const normalized = name.toLowerCase();
+    if (config.harvestForbiddenBlocks.includes(normalized)) return false;
+    if (isForbiddenByNameHints(normalized)) return false;
+    return config.harvestAllowedBlocks.includes(normalized);
+  }
+
+  function getCropAge(target: TargetBlockInfo): number | null {
+    const properties = target.block.getProperties();
+    const age = properties.age;
+    if (typeof age !== "number" || !Number.isFinite(age)) {
+      return null;
+    }
+    return age;
+  }
+
+  function validateCropMaturity(target: TargetBlockInfo): ActionValidation {
+    if (!config.allowCropHarvest) {
+      return {
+        allowed: false,
+        reason: "Crop harvesting is disabled by safety settings.",
+        code: "crop-disabled"
+      };
+    }
+
+    const requiredAge = CROP_MATURITY_AGES[target.name];
+    if (requiredAge === undefined) {
+      return {
+        allowed: false,
+        reason: "That target is not a supported crop.",
+        code: "crop-unsupported"
+      };
+    }
+
+    if (!config.requireMatureCrops) {
+      return { allowed: true, reason: "allowed", code: "allowed" };
+    }
+
+    const age = getCropAge(target);
+    if (age === null) {
+      return {
+        allowed: false,
+        reason: "I cannot confirm that crop is mature yet.",
+        code: "crop-age-unknown"
+      };
+    }
+
+    if (age < requiredAge) {
+      return {
+        allowed: false,
+        reason: "I cannot confirm that crop is mature yet.",
+        code: "crop-not-mature"
+      };
+    }
+
+    return { allowed: true, reason: "allowed", code: "allowed" };
+  }
+
+  function validateHarvestTarget(target: TargetBlockInfo, mode: "front" | "grass" | "crop"): ActionValidation {
+    if (!state.state.alive) {
+      return { allowed: false, reason: "I am not alive right now.", code: "not-alive" };
+    }
+
+    if (!movement.isEntityPositionHealthy() || !isFinitePosition(bot.entity?.position)) {
+      return { allowed: false, reason: "My position is not valid yet.", code: "position-invalid" };
+    }
+
+    const danger = perception.getDangerSummary(config.hostileDangerRadius);
+    state.setDangerSummary(danger);
+    if (danger.proximity === "close" || danger.proximity === "critical") {
+      return {
+        allowed: false,
+        reason: "I will not harvest while danger is nearby.",
+        code: "danger-nearby"
+      };
+    }
+
+    if (hasLowHealthForMining()) {
+      return {
+        allowed: false,
+        reason: "I will not harvest because my health is too low.",
+        code: "low-health"
+      };
+    }
+
+    if (target.distance > config.harvestMaxDistance) {
+      return {
+        allowed: false,
+        reason: "I will not harvest that block because it is too far away.",
+        code: "too-far"
+      };
+    }
+
+    if (!isHarvestAllowedByName(target.name)) {
+      return {
+        allowed: false,
+        reason: "That block is not in my safe harvest list.",
+        code: "not-allowed-list"
+      };
+    }
+
+    if (mode === "grass" && !HARVEST_GRASS_BLOCKS.has(target.name)) {
+      return {
+        allowed: false,
+        reason: "Harvest grass only works on grass, tall_grass, or fern.",
+        code: "grass-mode-mismatch"
+      };
+    }
+
+    if (mode === "crop") {
+      const cropDecision = validateCropMaturity(target);
+      if (!cropDecision.allowed) {
+        return cropDecision;
       }
     }
 
-    return { allowed: true };
+    if (isBlockTooNearHome(target.position) && !HARVEST_HOME_EXEMPT_BLOCKS.has(target.name)) {
+      return {
+        allowed: false,
+        reason: "I will not harvest inside my home area yet.",
+        code: "home-protected"
+      };
+    }
+
+    return { allowed: true, reason: "allowed", code: "allowed" };
   }
 
   async function moveNearBlock(blockPosition: Vec3): Promise<boolean> {
@@ -386,41 +688,117 @@ export function createActionController(
     }
   }
 
+  function collectOreTargets(radius: number): TargetBlockInfo[] {
+    if (!isFinitePosition(bot.entity?.position)) {
+      return [];
+    }
+
+    const center = bot.entity.position.floored();
+    const sampledRadius = Math.min(Math.max(Math.floor(radius), 1), 8);
+    const targets: TargetBlockInfo[] = [];
+
+    for (let dx = -sampledRadius; dx <= sampledRadius; dx += 1) {
+      for (let dy = -sampledRadius; dy <= sampledRadius; dy += 1) {
+        for (let dz = -sampledRadius; dz <= sampledRadius; dz += 1) {
+          const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+          const block = bot.blockAt(pos);
+          if (!block) continue;
+          const name = block.name.toLowerCase();
+          if (!ORE_NAMES.has(name)) continue;
+          targets.push({
+            block,
+            name,
+            position: block.position,
+            distance: bot.entity.position.distanceTo(block.position),
+            classification: perception.classifyBlock(name)
+          });
+        }
+      }
+    }
+
+    targets.sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
+    return targets;
+  }
+
   function getMineableOreSummary(radius: number): { ores: { name: string; count: number }[]; reason: string } {
-    const visible = perception.getNearbyOresSummary(radius);
-    if (visible.length === 0) {
+    const oreTargets = collectOreTargets(radius);
+    if (oreTargets.length === 0) {
       return { ores: [], reason: "none visible" };
     }
 
     if (!config.allowMining) {
-      return { ores: [], reason: "mining disabled" };
+      return { ores: [], reason: "mining disabled." };
     }
     if (!state.state.alive || !movement.isEntityPositionHealthy()) {
-      return { ores: [], reason: "not ready" };
+      return { ores: [], reason: "not ready." };
     }
     if (hasDangerForMining()) {
-      return { ores: [], reason: "unsafe" };
+      return { ores: [], reason: "unsafe." };
+    }
+    if (hasLowHealthForMining()) {
+      return { ores: [], reason: "health too low." };
     }
 
-    const pickaxe = getBestPickaxe(bot);
-    if (config.requireToolForOres && !pickaxe) {
-      return { ores: [], reason: "no pickaxe" };
+    const mineableCounts = new Map<string, number>();
+    let firstFailureReason = "";
+
+    for (const target of oreTargets) {
+      const decision = validateMiningTarget(target);
+      if (!decision.allowed) {
+        if (!firstFailureReason) {
+          firstFailureReason = decision.reason;
+        }
+        continue;
+      }
+      mineableCounts.set(target.name, (mineableCounts.get(target.name) ?? 0) + 1);
     }
 
-    const nearestOre = perception.getNearestOre(radius);
-    if (!nearestOre) {
-      return { ores: [], reason: "none visible" };
-    }
-    if (nearestOre.distance > config.miningMaxDistance) {
-      return { ores: [], reason: "too far" };
+    const mineable = Array.from(mineableCounts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+    if (mineable.length === 0) {
+      if (firstFailureReason) {
+        return { ores: [], reason: firstFailureReason };
+      }
+      return { ores: [], reason: "no safe ore target found." };
     }
 
-    const allowed = visible.filter((ore) => config.miningAllowedBlocks.includes(ore.name));
-    if (allowed.length === 0) {
-      return { ores: [], reason: "not allowed list" };
+    return { ores: mineable, reason: "one or more ores are allowed and safe right now." };
+  }
+
+  function normalizeReasonText(reason: string): string {
+    return reason.endsWith(".") ? reason.slice(0, -1) : reason;
+  }
+
+  function getMiningPreview(target: TargetBlockInfo | null): { mineable: boolean; reason: string } {
+    if (!target) {
+      return { mineable: false, reason: "no target block" };
+    }
+    if (!config.allowMining) {
+      return { mineable: false, reason: "mining disabled" };
     }
 
-    return { ores: allowed, reason: "allowed" };
+    const decision = validateMiningTarget(target);
+    if (!decision.allowed) {
+      return { mineable: false, reason: normalizeReasonText(decision.reason) };
+    }
+    return { mineable: true, reason: "allowed" };
+  }
+
+  function getHarvestPreview(target: TargetBlockInfo | null): { harvestable: boolean; reason: string } {
+    if (!target) {
+      return { harvestable: false, reason: "no target block" };
+    }
+    if (!config.allowHarvest) {
+      return { harvestable: false, reason: "harvesting disabled" };
+    }
+
+    const decision = validateHarvestTarget(target, "front");
+    if (!decision.allowed) {
+      return { harvestable: false, reason: normalizeReasonText(decision.reason) };
+    }
+    return { harvestable: true, reason: "allowed" };
   }
 
   function getActionQueueSummary(): ActionQueueSummary {
@@ -453,6 +831,13 @@ export function createActionController(
       stopMiningNow(`requested-by-${requestedBy}`);
       clearMovementActions("stop-mining");
       chat.send("Mining stopped.", "mine-stop");
+      return;
+    }
+
+    if (safeAction.type === "STOP_HARVEST") {
+      stopHarvestNow(`requested-by-${requestedBy}`);
+      clearMovementActions("stop-harvest");
+      chat.send("Harvest stopped.", "harvest-stop");
       return;
     }
 
@@ -574,6 +959,7 @@ export function createActionController(
 
       case "STOP_MOVING": {
         stopMiningNow("stop-command");
+        stopHarvestNow("stop-command");
         clearMovementActions("stop");
         movement.stop("stop command");
         chat.send("Stopped.", "stop");
@@ -583,6 +969,12 @@ export function createActionController(
       case "STOP_MINING": {
         stopMiningNow("stop-mining-action");
         chat.send("Mining stopped.", "mine-stop");
+        return true;
+      }
+
+      case "STOP_HARVEST": {
+        stopHarvestNow("stop-harvest-action");
+        chat.send("Harvest stopped.", "harvest-stop");
         return true;
       }
 
@@ -616,6 +1008,8 @@ export function createActionController(
 
       case "RECOVER": {
         logger.log("survival", "Recovery requested.");
+        stopMiningNow("recover");
+        stopHarvestNow("recover");
         clearMovementActions("recover");
         clearActionQueue("recover");
         movement.stop("recover");
@@ -734,7 +1128,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -819,9 +1213,11 @@ export function createActionController(
             caps.home
           )}, flee=${String(caps.flee)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
             caps.equipment
-          )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, combat=${String(caps.combat)}, building=${String(
+          )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, harvesting=${String(
+            caps.harvesting
+          )}, cropHarvesting=${String(caps.cropHarvesting)}, combat=${String(caps.combat)}, building=${String(
             caps.building
-          )}, containers=${String(caps.containers)}, ai=${String(caps.ai)}.`,
+          )}, crafting=${String(caps.crafting)}, containers=${String(caps.containers)}, ai=${String(caps.ai)}.`,
           "capabilities"
         );
         return true;
@@ -830,12 +1226,21 @@ export function createActionController(
       case "REPORT_VITALS": {
         const snapshot = state.getBotSnapshot();
         const pos = snapshot.position
-          ? `(${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}, ${snapshot.position.z.toFixed(1)})`
+          ? `${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}, ${snapshot.position.z.toFixed(1)}`
           : "unknown";
-        const dangerText = formatDanger(snapshot.dangerSummary);
+        const dangerText =
+          snapshot.dangerSummary.proximity === "none"
+            ? "none"
+            : formatDanger(snapshot.dangerSummary);
+        const saturationText =
+          snapshot.saturation === null || !Number.isFinite(snapshot.saturation)
+            ? "unknown"
+            : Number(snapshot.saturation.toFixed(1)).toString();
 
         chat.send(
-          `Vitals: hp=${snapshot.health ?? "unknown"}, food=${snapshot.food ?? "unknown"}, sat=${snapshot.saturation ?? "unknown"}, hunger=${snapshot.hungerStatus}, oxy=${snapshot.oxygen ?? "unknown"}, alive=${snapshot.alive}, pos=${pos}, danger=${dangerText}.`,
+          `Health: ${toOneDecimal(snapshot.health)}/20 | Food: ${toWhole(snapshot.food)}/20 | Saturation: ${saturationText} | Oxygen: ${toWhole(
+            snapshot.oxygen
+          )} | Alive: ${String(snapshot.alive)} | Danger: ${dangerText} | Position: ${pos}`,
           "vitals"
         );
         return true;
@@ -1043,51 +1448,56 @@ export function createActionController(
           return false;
         }
 
-        let targetVec: Vec3 | null = null;
-        let targetName: string | null = null;
+        let target: TargetBlockInfo | null = null;
 
         if (action.mode === "ore") {
-          const nearestOre = perception.getNearestOre(6);
-          if (!nearestOre) {
+          const oreTargets = collectOreTargets(6);
+          if (oreTargets.length === 0) {
             chat.send("I do not see a nearby ore to mine.", "mine-ore-none");
             return false;
           }
-          targetVec = new Vec3(nearestOre.position.x, nearestOre.position.y, nearestOre.position.z);
-          targetName = nearestOre.name;
-        } else {
-          const obstacle = perception.getImmediateObstacles();
-          const candidates = [obstacle.blockFrontFeet.position, obstacle.blockFrontHead.position].filter(
-            (entry): entry is { x: number; y: number; z: number } => entry !== null
-          );
-          for (const candidate of candidates) {
-            const block = bot.blockAt(new Vec3(candidate.x, candidate.y, candidate.z));
-            const blockName = block?.name?.toLowerCase() ?? null;
-            if (!blockName) continue;
-            const classification = perception.classifyBlock(blockName);
-            if (classification === "air" || classification === "passable" || classification === "fluid") continue;
-            targetVec = new Vec3(candidate.x, candidate.y, candidate.z);
-            targetName = blockName;
-            break;
+
+          let selected: TargetBlockInfo | null = null;
+          let rejectedReason = "";
+          for (const ore of oreTargets) {
+            const decision = validateMiningTarget(ore);
+            if (decision.allowed) {
+              selected = ore;
+              break;
+            }
+            if (!rejectedReason) {
+              rejectedReason = decision.reason;
+            }
           }
+
+          if (!selected) {
+            logger.warn("mining", "mine ore rejected", { rejectedReason });
+            chat.send("I can see ore, but I cannot mine it safely yet.", "mine-ore-unsafe");
+            return false;
+          }
+
+          target = selected;
+        } else {
+          target = getTargetBlockFromView(config.blockTargetRaycastDistance);
         }
 
-        if (!targetVec || !targetName) {
+        if (!target) {
           chat.send("No safe front block found to mine.", "mine-no-target");
           return false;
         }
 
-        const safety = validateTargetSafety(targetVec, targetName);
-        if (!safety.allowed) {
-          if (action.mode === "ore" && safety.reason !== "I will not mine inside my home area yet.") {
+        const safetyDecision = validateMiningTarget(target);
+        if (!safetyDecision.allowed) {
+          if (action.mode === "ore" && safetyDecision.code !== "home-protected") {
             chat.send("I can see ore, but I cannot mine it safely yet.", "mine-ore-unsafe");
           } else {
-            chat.send(safety.reason ?? "I cannot mine that block safely.", "mine-unsafe");
+            chat.send(safetyDecision.reason, "mine-unsafe");
           }
           return false;
         }
 
         if (action.mode === "ore") {
-          const moved = await moveNearBlock(targetVec);
+          const moved = await moveNearBlock(target.position);
           if (!moved) {
             stopMiningNow("move-near-failed");
             chat.send("I can see ore, but I cannot mine it safely yet.", "mine-ore-move-failed");
@@ -1095,13 +1505,17 @@ export function createActionController(
           }
         }
 
-        const toolDecision = await equipRequiredToolForBlock(targetName);
+        const toolDecision = await equipRequiredToolForBlock(target.name);
         if (!toolDecision.ok) {
-          chat.send(toolDecision.reason ?? "I cannot equip the required tool.", "mine-tool-failed");
+          const reason =
+            toolDecision.reason === "Equipment use is disabled by safety settings."
+              ? "Equipment use is disabled, and I need a tool for that block."
+              : toolDecision.reason ?? "I cannot equip the required tool.";
+          chat.send(reason, "mine-tool-failed");
           return false;
         }
 
-        const blockToDig = bot.blockAt(targetVec);
+        const blockToDig = bot.blockAt(target.position);
         if (!blockToDig) {
           chat.send("That block is no longer available.", "mine-missing-block");
           return false;
@@ -1144,10 +1558,10 @@ export function createActionController(
         safetyMonitor.unref();
 
         try {
-          await bot.lookAt(targetVec.offset(0.5, 0.5, 0.5), true);
+          await bot.lookAt(target.position.offset(0.5, 0.5, 0.5), true);
           logger.log(
             "mining",
-            `start block=${blockToDig.name} pos=(${targetVec.x},${targetVec.y},${targetVec.z})`
+            `start block=${blockToDig.name} pos=(${target.position.x},${target.position.y},${target.position.z})`
           );
           await Promise.race([bot.dig(blockToDig, true), timeoutPromise]);
         } catch (error) {
@@ -1181,6 +1595,31 @@ export function createActionController(
         miningActive = false;
         miningTargetName = null;
         chat.send(`Mined ${blockToDig.name}.`, "mine-success");
+        return true;
+      }
+
+      case "REPORT_TARGET": {
+        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        if (!target) {
+          chat.send("No solid target block in range.", "target-none");
+          return true;
+        }
+
+        const minePreview = getMiningPreview(target);
+        const harvestPreview = getHarvestPreview(target);
+        logger.log("perception", "Target preview", {
+          target: summarizeTargetBlock(target),
+          minePreview,
+          harvestPreview
+        });
+
+        const mineText = minePreview.mineable ? "yes" : `no - ${minePreview.reason}`;
+        const harvestText = harvestPreview.harvestable ? "yes" : `no - ${harvestPreview.reason}`;
+
+        chat.send(
+          `Target: ${target.name} at ${target.distance.toFixed(1)} blocks. Category: ${target.classification}. Mineable: ${mineText}. Harvestable: ${harvestText}.`,
+          "target"
+        );
         return true;
       }
 
@@ -1225,13 +1664,143 @@ export function createActionController(
         const mineable = getMineableOreSummary(6);
         const mineableText =
           mineable.ores.length === 0
-            ? `none (${mineable.reason})`
+            ? "none"
             : mineable.ores
                 .slice(0, 6)
                 .map((ore) => `${ore.name} x${ore.count}`)
                 .join(", ");
 
-        chat.send(`Visible ores: ${visibleText}. Mineable now: ${mineableText}.`, "ore-report");
+        chat.send(
+          `Visible ores: ${visibleText}. Mineable now: ${mineableText}. Reason: ${mineable.reason}`,
+          "ore-report"
+        );
+        return true;
+      }
+
+      case "REPORT_HARVEST_REPORT": {
+        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        const harvestPreview = getHarvestPreview(target);
+        const allowedList = config.harvestAllowedBlocks.slice(0, 10).join(", ");
+        const harvestEnabled = config.allowHarvest ? "enabled" : "disabled";
+        const cropEnabled = config.allowCropHarvest ? "enabled" : "disabled";
+        const replantEnabled = config.replantCrops ? "enabled" : "disabled";
+        const targetText = harvestPreview.harvestable ? "yes" : `no (${harvestPreview.reason})`;
+
+        chat.send(
+          `Harvesting: ${harvestEnabled}. Allowed: ${allowedList}. Crop harvesting: ${cropEnabled}. Replanting: ${replantEnabled}. Target harvestable: ${targetText}.`,
+          "harvest-report"
+        );
+        return true;
+      }
+
+      case "HARVEST_BLOCK": {
+        if (!config.allowHarvest) {
+          chat.send("Harvesting is disabled by safety settings.", "harvest-disabled");
+          return false;
+        }
+
+        if (movement.getMode() !== "idle") {
+          movement.stop("harvest-start");
+        }
+
+        if (!state.state.alive) {
+          chat.send("I cannot harvest while not alive.", "harvest-not-alive");
+          return false;
+        }
+
+        if (!movement.isEntityPositionHealthy() || !isFinitePosition(bot.entity?.position)) {
+          chat.send("My position is not valid yet.", "harvest-not-ready");
+          return false;
+        }
+
+        const mode = action.mode ?? "front";
+        const target = getTargetBlockFromView(config.blockTargetRaycastDistance);
+        if (!target) {
+          chat.send("No harvestable target block in range.", "harvest-no-target");
+          return false;
+        }
+
+        const decision = validateHarvestTarget(target, mode);
+        if (!decision.allowed) {
+          chat.send(decision.reason, "harvest-unsafe");
+          return false;
+        }
+
+        if (!bot.canDigBlock(target.block)) {
+          chat.send("I cannot harvest that block safely.", "harvest-cannot-dig");
+          return false;
+        }
+
+        harvestCancelled = false;
+        harvestActive = true;
+        harvestTargetName = target.block.name;
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          harvestTimeoutHandle = setTimeout(() => {
+            harvestCancelled = true;
+            stopHarvestNow("timeout");
+            reject(new Error("harvest-timeout"));
+          }, config.harvestTimeoutMs);
+          harvestTimeoutHandle.unref();
+        });
+
+        let cancelledReason = "";
+        const safetyMonitor = setInterval(() => {
+          if (!movement.isEntityPositionHealthy()) {
+            cancelledReason = "invalid-position";
+            harvestCancelled = true;
+          } else if (hasDangerForMining()) {
+            cancelledReason = "danger";
+            harvestCancelled = true;
+          } else if (hasLowHealthForMining()) {
+            cancelledReason = "low-health";
+            harvestCancelled = true;
+          }
+
+          if (harvestCancelled) {
+            stopHarvestNow(cancelledReason || "cancelled");
+          }
+        }, 250);
+        safetyMonitor.unref();
+
+        try {
+          await bot.lookAt(target.position.offset(0.5, 0.5, 0.5), true);
+          logger.log(
+            "survival",
+            `harvest start block=${target.block.name} pos=(${target.position.x},${target.position.y},${target.position.z}) mode=${mode}`
+          );
+          await Promise.race([bot.dig(target.block, true), timeoutPromise]);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.warn("survival", `harvest failed: ${message}`);
+          if (!harvestCancelled) {
+            chat.send("I could not harvest that block.", "harvest-failed");
+          }
+          harvestActive = false;
+          if (harvestTimeoutHandle) {
+            clearTimeout(harvestTimeoutHandle);
+            harvestTimeoutHandle = null;
+          }
+          clearInterval(safetyMonitor);
+          return false;
+        }
+
+        clearInterval(safetyMonitor);
+        if (harvestTimeoutHandle) {
+          clearTimeout(harvestTimeoutHandle);
+          harvestTimeoutHandle = null;
+        }
+
+        if (harvestCancelled) {
+          chat.send("Harvest stopped for safety.", "harvest-stopped-safety");
+          harvestActive = false;
+          harvestTargetName = null;
+          return false;
+        }
+
+        harvestActive = false;
+        harvestTargetName = null;
+        chat.send(`Harvested ${target.block.name}.`, "harvest-success");
         return true;
       }
 
@@ -1255,33 +1824,44 @@ export function createActionController(
 
       case "REPORT_SAFETY_TEST": {
         const mining = safety.validateAction(item.requestedBy, { type: "MINE_BLOCK" }, { dryRun: true });
+        const harvesting = safety.validateAction(
+          item.requestedBy,
+          { type: "HARVEST_BLOCK", mode: "front" },
+          { dryRun: true }
+        );
+        const cropHarvesting = safety.validateAction(
+          item.requestedBy,
+          { type: "HARVEST_BLOCK", mode: "crop" },
+          { dryRun: true }
+        );
         const combat = safety.validateAction(item.requestedBy, { type: "ATTACK_ENTITY" }, { dryRun: true });
         const building = safety.validateAction(item.requestedBy, { type: "PLACE_BLOCK" }, { dryRun: true });
+        const crafting = safety.validateAction(item.requestedBy, { type: "CRAFT_ITEM", itemName: "oak_planks" }, { dryRun: true });
         const inventory = safety.validateAction(item.requestedBy, { type: "OPEN_INVENTORY" }, { dryRun: true });
         const eating = safety.validateAction(item.requestedBy, { type: "EAT_FOOD" }, { dryRun: true });
         const equip = safety.validateAction(item.requestedBy, { type: "EQUIP_ITEM", category: "pickaxe" }, { dryRun: true });
 
         const miningWord = mining.allowed ? "allowed" : "blocked";
+        const harvestingWord = harvesting.allowed ? "allowed" : "blocked";
+        const cropHarvestingWord = cropHarvesting.allowed ? "allowed" : "blocked";
         const combatWord = combat.allowed ? "allowed" : "blocked";
         const buildingWord = building.allowed ? "allowed" : "blocked";
+        const craftingWord = crafting.allowed ? "allowed" : "blocked";
         const inventoryWord = inventory.allowed ? "allowed" : "blocked";
         const eatingWord = eating.allowed ? "allowed" : "blocked";
         const equipWord = equip.allowed ? "allowed" : "blocked";
+        const aiWord = config.enableAiBridge ? "allowed" : "blocked";
+        const inventoryReadWord = "allowed";
 
-        const result =
-          miningWord === "blocked" &&
-          combatWord === "blocked" &&
-          buildingWord === "blocked" &&
-          inventoryWord === "blocked" &&
-          eatingWord === "blocked" &&
-          equipWord === "blocked"
-            ? "Safety test: mining blocked, combat blocked, building blocked, inventory blocked."
-            : `Safety test: mining ${miningWord}, equip ${equipWord}, eating ${eatingWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}.`;
+        const result = `Safety test: eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
+          harvesting,
+          cropHarvesting,
           combat,
           building,
+          crafting,
           inventory,
           eating,
           equip

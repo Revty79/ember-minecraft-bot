@@ -38,9 +38,12 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     equipment: config.allowEquip,
     eating: config.allowEating,
     mining: config.allowMining,
+    harvesting: config.allowHarvest,
+    cropHarvesting: config.allowCropHarvest,
     combat: config.allowCombat,
     building: config.allowBuilding,
-    containers: config.allowInventory,
+    crafting: false,
+    containers: false,
     ai: config.enableAiBridge
   };
 }
@@ -94,7 +97,9 @@ function createInitialState(config: AppConfig): BotState {
       allowInventory: config.allowInventory,
       allowEating: config.allowEating,
       allowEquip: config.allowEquip,
-      allowFlee: config.allowFlee
+      allowFlee: config.allowFlee,
+      allowHarvest: config.allowHarvest,
+      allowCropHarvest: config.allowCropHarvest
     },
     aiBridgeEnabled: config.enableAiBridge,
     aiBridgeUrl: config.enableAiBridge ? config.aiBridgeUrl ?? null : null,

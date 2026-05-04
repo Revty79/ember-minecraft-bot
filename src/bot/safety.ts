@@ -2,8 +2,10 @@
 import type { BotAction, Logger, SafetyDecision, SafetyLayer, StateStore } from "./types";
 
 const MINING_ACTIONS = new Set<BotAction["type"]>(["MINE_BLOCK"]);
+const HARVEST_ACTIONS = new Set<BotAction["type"]>(["HARVEST_BLOCK"]);
 const COMBAT_ACTIONS = new Set<BotAction["type"]>(["ATTACK_ENTITY"]);
 const BUILDING_ACTIONS = new Set<BotAction["type"]>(["PLACE_BLOCK"]);
+const CRAFTING_ACTIONS = new Set<BotAction["type"]>(["CRAFT_ITEM"]);
 const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY"]);
 const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
 const EQUIP_ACTIONS = new Set<BotAction["type"]>(["EQUIP_ITEM"]);
@@ -25,6 +27,8 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "FLEE_DANGER",
     "MINE_BLOCK",
     "STOP_MINING",
+    "HARVEST_BLOCK",
+    "STOP_HARVEST",
     "EQUIP_ITEM",
     "EAT_FOOD",
     "CLEAR_HOME",
@@ -42,6 +46,8 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_FOOD",
     "REPORT_HUNGER",
     "REPORT_THREAT",
+    "REPORT_TARGET",
+    "REPORT_HARVEST_REPORT",
     "REPORT_BLOCK",
     "REPORT_ORES_NEARBY",
     "REPORT_ORE_REPORT"
@@ -95,12 +101,24 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Mining is disabled by safety settings.", requestor, action);
     }
 
+    if (!config.allowHarvest && HARVEST_ACTIONS.has(action.type)) {
+      return reject("Harvesting is disabled by safety settings.", requestor, action);
+    }
+
+    if (action.type === "HARVEST_BLOCK" && action.mode === "crop" && !config.allowCropHarvest) {
+      return reject("Crop harvesting is disabled by safety settings.", requestor, action);
+    }
+
     if (!config.allowCombat && COMBAT_ACTIONS.has(action.type)) {
       return reject("Combat actions are disabled by policy.", requestor, action);
     }
 
     if (!config.allowBuilding && BUILDING_ACTIONS.has(action.type)) {
       return reject("Building actions are disabled by policy.", requestor, action);
+    }
+
+    if (CRAFTING_ACTIONS.has(action.type)) {
+      return reject("Crafting actions are disabled by policy.", requestor, action);
     }
 
     if (!config.allowInventory && INVENTORY_ACTIONS.has(action.type)) {
@@ -139,6 +157,14 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       !isOwner(requestor)
     ) {
       return reject("Only owner can run mining actions.", requestor, action);
+    }
+
+    if (
+      config.harvestOwnerOnly &&
+      action.type === "HARVEST_BLOCK" &&
+      !isOwner(requestor)
+    ) {
+      return reject("Only owner can run harvesting actions.", requestor, action);
     }
 
     const capabilityDecision = validateCapabilityFlags(action, requestor);
