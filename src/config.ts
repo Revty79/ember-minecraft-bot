@@ -10,6 +10,15 @@ export interface AppConfig {
   ownerUsername: string;
   enableAiBridge: boolean;
   aiBridgeUrl?: string;
+  enableAiShadow: boolean;
+  shadowBridgeUrl?: string;
+  shadowBridgeToken: string;
+  shadowObservationIntervalMs: number;
+  shadowSendWhileMoving: boolean;
+  shadowSendRecentEvents: number;
+  shadowTimeoutMs: number;
+  shadowLogResponse: boolean;
+  shadowChatSummary: boolean;
   observationIntervalMs: number;
   stateLogIntervalMs: number;
   maxChatLength: number;
@@ -175,6 +184,16 @@ export function loadConfig(): AppConfig {
   const ownerUsername = readEnv("OWNER_USERNAME", "BIRevty");
   const enableAiBridge = readBoolean("ENABLE_AI_BRIDGE", false);
   const aiBridgeUrl = process.env.AI_BRIDGE_URL?.trim() || "http://127.0.0.1:3004/api/minecraft";
+  const enableAiShadow = readBoolean("ENABLE_AI_SHADOW", false);
+  const shadowBridgeUrl =
+    process.env.SHADOW_BRIDGE_URL?.trim() || "http://10.0.0.218:3004/api/minecraft/shadow";
+  const shadowBridgeToken = process.env.SHADOW_BRIDGE_TOKEN?.trim() ?? "";
+  const shadowObservationIntervalMs = readInteger("SHADOW_OBSERVATION_INTERVAL_MS", 10000, 1000);
+  const shadowSendWhileMoving = readBoolean("SHADOW_SEND_WHILE_MOVING", true);
+  const shadowSendRecentEvents = readInteger("SHADOW_SEND_RECENT_EVENTS", 25, 1);
+  const shadowTimeoutMs = readInteger("SHADOW_TIMEOUT_MS", 15000, 250);
+  const shadowLogResponse = readBoolean("SHADOW_LOG_RESPONSE", true);
+  const shadowChatSummary = readBoolean("SHADOW_CHAT_SUMMARY", false);
   const observationIntervalMs = readInteger("OBSERVATION_INTERVAL_MS", 5000, 250);
   const stateLogIntervalMs = readInteger("STATE_LOG_INTERVAL_MS", 10000, 1000);
   const maxChatLength = readInteger("MAX_CHAT_LENGTH", 220, 8);
@@ -331,6 +350,15 @@ export function loadConfig(): AppConfig {
     ownerUsername,
     enableAiBridge,
     aiBridgeUrl,
+    enableAiShadow,
+    shadowBridgeUrl,
+    shadowBridgeToken,
+    shadowObservationIntervalMs,
+    shadowSendWhileMoving,
+    shadowSendRecentEvents,
+    shadowTimeoutMs,
+    shadowLogResponse,
+    shadowChatSummary,
     observationIntervalMs,
     stateLogIntervalMs,
     maxChatLength,

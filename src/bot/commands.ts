@@ -354,6 +354,26 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember shadow status") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SHADOW_STATUS" }, "shadow-status");
+      return;
+    }
+
+    if (normalized === "ember shadow last") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SHADOW_LAST" }, "shadow-last");
+      return;
+    }
+
+    if (normalized === "ember shadow test") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SHADOW_TEST" }, "shadow-test");
+      return;
+    }
+
+    if (normalized === "ember shadow summary") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SHADOW_SUMMARY" }, "shadow-summary");
+      return;
+    }
+
     if (normalized === "ember action queue") {
       queueOwnerOnlyCommand(username, { type: "REPORT_ACTION_QUEUE" }, "action-queue");
       return;

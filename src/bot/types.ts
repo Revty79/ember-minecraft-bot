@@ -14,6 +14,7 @@ export type LogPrefix =
   | "mining"
   | "perception"
   | "ai"
+  | "shadow"
   | "state"
   | "survival";
 
@@ -158,6 +159,7 @@ export interface CapabilitySummary {
   flee: boolean;
   wandering: boolean;
   tasks: boolean;
+  shadow: boolean;
   inventoryRead: boolean;
   equipment: boolean;
   eating: boolean;
@@ -282,6 +284,17 @@ export interface BotState {
   aiBridgeEnabled: boolean;
   aiBridgeUrl: string | null;
   lastAiBridgeError: string | null;
+  shadowEnabled: boolean;
+  shadowBridgeUrl: string | null;
+  shadowLastSentAt: string | null;
+  shadowLastResponseAt: string | null;
+  shadowLastError: string | null;
+  shadowLastReply: string | null;
+  shadowLastWouldDo: string | null;
+  shadowLastConfidence: ShadowConfidence | null;
+  shadowLastLogId: string | null;
+  shadowSendCount: number;
+  shadowErrorCount: number;
   actionQueueLength: number;
   runningAction: string | null;
   blockedReason: string | null;
@@ -307,6 +320,10 @@ export type BotEventType =
   | "ai_bridge_skipped"
   | "ai_bridge_sent"
   | "ai_bridge_error"
+  | "shadow_skipped"
+  | "shadow_sent"
+  | "shadow_response"
+  | "shadow_error"
   | "state_update"
   | "error";
 
@@ -341,6 +358,10 @@ export type BotAction =
   | { type: "REPORT_DISTANCE" }
   | { type: "REPORT_DEBUG" }
   | { type: "REPORT_AI_STATUS" }
+  | { type: "REPORT_SHADOW_STATUS" }
+  | { type: "REPORT_SHADOW_LAST" }
+  | { type: "REPORT_SHADOW_TEST" }
+  | { type: "REPORT_SHADOW_SUMMARY" }
   | { type: "REPORT_ACTION_QUEUE" }
   | { type: "REPORT_CAPABILITIES" }
   | { type: "REPORT_VITALS" }
@@ -477,6 +498,110 @@ export interface AiBridgeStatus {
   lastError: string | null;
 }
 
+export type ShadowConfidence = "low" | "medium" | "high";
+
+export interface ShadowObservation {
+  timestamp: string;
+  source: "ember-minecraft-bot";
+  mode: "shadow";
+  build: {
+    version: string | null;
+  };
+  bot: BotSnapshot;
+  task: TaskState;
+  movement: MovementState;
+  vitals: {
+    health: number | null;
+    maxHealth: number;
+    food: number | null;
+    maxFood: number;
+    saturation: number | null;
+    oxygen: number | null;
+    alive: boolean;
+    danger: DangerProximity;
+    position: Vec3Snapshot | null;
+  };
+  hungerFood: {
+    hungerStatus: HungerStatus;
+    foodItems: FoodItemSummary[];
+  };
+  equipment: EquipmentSummary;
+  inventory: InventorySummary;
+  dangerSummary: DangerSummary;
+  nearbyPlayers: PlayerSummary[];
+  nearbyEntities: EntitySummary[];
+  nearbyHostiles: EntitySummary[];
+  perception: PerceptionSnapshot;
+  targetBlock: {
+    name: string | null;
+    category: BlockClass | null;
+    distance: number | null;
+  };
+  mining: {
+    enabled: boolean;
+    allowedBlocks: string[];
+    forbiddenBlocks: string[];
+    maxDistance: number;
+    homeProtectionRadius: number;
+    previewMaxDistance: number;
+    mineableOres: BlockSummary[];
+  };
+  harvesting: {
+    enabled: boolean;
+    cropHarvestingEnabled: boolean;
+    replantEnabled: boolean;
+    allowedBlocks: string[];
+    forbiddenBlocks: string[];
+    maxDistance: number;
+  };
+  yard: {
+    enabled: boolean;
+    centerMode: "home";
+    radius: number;
+    homePosition: Vec3Snapshot | null;
+    distanceFromHome: number | null;
+    insideRadius: boolean | null;
+    active: boolean;
+    steps: number;
+    maxSteps: number;
+    endsAt: string | null;
+    lastStopReason: string | null;
+  };
+  safetyFlags: SafetyFlags;
+  actionQueue: ActionQueueSummary;
+  recentEvents: BotEvent[];
+}
+
+export type ShadowSendOutcomeCode =
+  | "sent"
+  | "skipped_disabled"
+  | "skipped_not_ready"
+  | "skipped_moving"
+  | "skipped_in_flight"
+  | "skipped_unconfigured"
+  | "error";
+
+export interface ShadowSendOutcome {
+  code: ShadowSendOutcomeCode;
+  message: string;
+}
+
+export interface ShadowBridgeStatus {
+  enabled: boolean;
+  configured: boolean;
+  url: string | null;
+  lastSentAt: string | null;
+  lastResponseAt: string | null;
+  lastError: string | null;
+  lastReply: string | null;
+  lastWouldDo: string | null;
+  lastConfidence: ShadowConfidence | null;
+  lastLogId: string | null;
+  sendCount: number;
+  errorCount: number;
+  inFlight: boolean;
+}
+
 export interface StateStore {
   state: BotState;
   setConnected: (value: boolean) => void;
@@ -525,6 +650,19 @@ export interface StateStore {
   setLastChatTimestamp: (isoTimestamp: string | null) => void;
   setLastCommandReceived: (message: string | null) => void;
   setAiBridgeError: (message: string | null) => void;
+  setShadowState: (shadow: Partial<{
+    shadowEnabled: boolean;
+    shadowBridgeUrl: string | null;
+    shadowLastSentAt: string | null;
+    shadowLastResponseAt: string | null;
+    shadowLastError: string | null;
+    shadowLastReply: string | null;
+    shadowLastWouldDo: string | null;
+    shadowLastConfidence: ShadowConfidence | null;
+    shadowLastLogId: string | null;
+    shadowSendCount: number;
+    shadowErrorCount: number;
+  }>) => void;
   setActionQueueInfo: (queueLength: number, runningAction: string | null) => void;
   setBlockedReason: (reason: string | null) => void;
   getBotSnapshot: () => BotSnapshot;
@@ -615,6 +753,12 @@ export interface AiBridgeController {
   buildObservation: () => AiObservation;
 }
 
+export interface ShadowBridgeController {
+  getStatus: () => ShadowBridgeStatus;
+  sendObservationToShadowBridge: (options?: { force?: boolean; reason?: string }) => Promise<ShadowSendOutcome>;
+  buildObservation: () => ShadowObservation;
+}
+
 export interface CommandRouter {
   routeChatMessage: (input: CommandInput) => void;
 }
@@ -631,6 +775,7 @@ export interface BotRuntime {
   perception: PerceptionController;
   actions: ActionController;
   aiBridge: AiBridgeController;
+  shadowBridge: ShadowBridgeController;
   commands: CommandRouter;
   lifecycle: LifecycleController;
 }

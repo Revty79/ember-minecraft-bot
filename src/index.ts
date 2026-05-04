@@ -12,7 +12,8 @@ import { createActionController } from "./bot/actions";
 import { createCommandRouter } from "./bot/commands";
 import { createLifecycleController } from "./bot/lifecycle";
 import { createAiBridgeController } from "./bot/aiBridge";
-import type { AiBridgeController } from "./bot/types";
+import { createShadowBridgeController } from "./bot/shadowBridge";
+import type { AiBridgeController, ShadowBridgeController } from "./bot/types";
 
 dotenv.config();
 
@@ -26,9 +27,11 @@ if (config.minecraftVersion) {
 }
 logger.log(
   "config",
-  `announce=${String(config.announceOnSpawn)} owner=${config.ownerUsername} aiBridge=${String(
-    config.enableAiBridge
-  )}`
+  `announce=${String(config.announceOnSpawn)} owner=${config.ownerUsername} aiBridge=${String(config.enableAiBridge)} shadow=${String(config.enableAiShadow)}`
+);
+logger.log(
+  "config",
+  `shadow intervalMs=${config.shadowObservationIntervalMs} sendWhileMoving=${String(config.shadowSendWhileMoving)} recentEvents=${config.shadowSendRecentEvents} timeoutMs=${config.shadowTimeoutMs} logResponse=${String(config.shadowLogResponse)} chatSummary=${String(config.shadowChatSummary)}`
 );
 logger.log(
   "config",
@@ -103,6 +106,7 @@ const perception = createPerceptionController(bot, state, logger);
 const movement = createMovementController(bot, config, state, safety, chat, perception, logger);
 
 let aiBridgeController: AiBridgeController | null = null;
+let shadowBridgeController: ShadowBridgeController | null = null;
 const actions = createActionController(
   bot,
   config,
@@ -117,9 +121,32 @@ const actions = createActionController(
       enabled: config.enableAiBridge,
       url: config.enableAiBridge ? config.aiBridgeUrl ?? null : null,
       lastError: state.state.lastAiBridgeError
-    }
+    },
+  () =>
+    shadowBridgeController?.getStatus() ?? {
+      enabled: config.enableAiShadow,
+      configured: Boolean(config.shadowBridgeUrl?.trim()) && Boolean(config.shadowBridgeToken.trim()),
+      url: config.shadowBridgeUrl ?? null,
+      lastSentAt: state.state.shadowLastSentAt,
+      lastResponseAt: state.state.shadowLastResponseAt,
+      lastError: state.state.shadowLastError,
+      lastReply: state.state.shadowLastReply,
+      lastWouldDo: state.state.shadowLastWouldDo,
+      lastConfidence: state.state.shadowLastConfidence,
+      lastLogId: state.state.shadowLastLogId,
+      sendCount: state.state.shadowSendCount,
+      errorCount: state.state.shadowErrorCount,
+      inFlight: false
+    },
+  () =>
+    shadowBridgeController?.sendObservationToShadowBridge({ force: true, reason: "manual-test" }) ??
+    Promise.resolve({
+      code: "error",
+      message: "Shadow bridge is not initialized."
+    })
 );
 aiBridgeController = createAiBridgeController(config, bot, state, perception, actions, logger);
+shadowBridgeController = createShadowBridgeController(config, bot, state, chat, movement, perception, actions, logger);
 
 const commands = createCommandRouter(config, state, chat, actions, safety, logger);
 const lifecycle = createLifecycleController(
@@ -140,6 +167,11 @@ const observationInterval = setInterval(() => {
   void aiBridgeController?.sendObservationToAiBridge();
 }, config.observationIntervalMs);
 observationInterval.unref();
+
+const shadowObservationInterval = setInterval(() => {
+  void shadowBridgeController?.sendObservationToShadowBridge({ reason: "interval" });
+}, config.shadowObservationIntervalMs);
+shadowObservationInterval.unref();
 
 let lastDangerStopAt = 0;
 const dangerInterval = setInterval(() => {
@@ -233,6 +265,7 @@ stateLogInterval.unref();
 function shutdown(signal: string): void {
   logger.log("connect", `Received ${signal}, shutting down...`);
   clearInterval(observationInterval);
+  clearInterval(shadowObservationInterval);
   clearInterval(dangerInterval);
   clearInterval(stateLogInterval);
   actions.clearActionQueue("shutdown");

@@ -2,24 +2,27 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.11: one-shot owner task system**.
+This release is **v0.12: shadow mode (observation only)**.
 
 - AI bridge remains optional and disabled by default.
+- Shadow mode is optional and disabled by default.
 - No autonomous behavior loops are enabled.
 - Combat/building/containers/crafting remain locked by default.
 - Harvesting exists as single-command scaffolding behind safety flags.
 - Wandering is owner-commanded, radius-bound, and time-limited behind safety flags.
 - Tasks are owner-commanded one-shot objectives only.
 
-## v0.11 Highlights
+## v0.12 Highlights
 
-- Added owner-only one-shot task commands with task state tracking.
-- Added task controls:
-  - `Ember task report`
-  - `Ember task stop`
-- Task actions use existing safety gates and capability restrictions.
-- Added task visibility in `Ember capabilities` and `Ember safety test`.
-- Kept non-autonomous behavior (single objective per task, then stop).
+- Added AI shadow mode as observation + suggestion + logging only.
+- Added periodic shadow observation loop with no-overlap protection.
+- Added owner commands:
+  - `Ember shadow status`
+  - `Ember shadow last`
+  - `Ember shadow test`
+  - `Ember shadow summary`
+- Added shadow visibility to `Ember capabilities` and `Ember safety test`.
+- Shadow responses never execute actions and never write to action queue.
 
 ## Environment
 
@@ -36,6 +39,15 @@ ANNOUNCE_ON_SPAWN=true
 OWNER_USERNAME=BIRevty
 ENABLE_AI_BRIDGE=false
 AI_BRIDGE_URL=http://127.0.0.1:3004/api/minecraft
+ENABLE_AI_SHADOW=false
+SHADOW_BRIDGE_URL=http://10.0.0.218:3004/api/minecraft/shadow
+SHADOW_BRIDGE_TOKEN=
+SHADOW_OBSERVATION_INTERVAL_MS=10000
+SHADOW_SEND_WHILE_MOVING=true
+SHADOW_SEND_RECENT_EVENTS=25
+SHADOW_TIMEOUT_MS=15000
+SHADOW_LOG_RESPONSE=true
+SHADOW_CHAT_SUMMARY=false
 OBSERVATION_INTERVAL_MS=5000
 STATE_LOG_INTERVAL_MS=10000
 STATE_LOG_ONLY_ON_CHANGE=true
@@ -189,6 +201,10 @@ Owner-only:
 - `Ember state`
 - `Ember debug`
 - `Ember ai status`
+- `Ember shadow status`
+- `Ember shadow last`
+- `Ember shadow test`
+- `Ember shadow summary`
 - `Ember action queue`
 - `Ember task go home`
 - `Ember task follow owner`
@@ -208,6 +224,7 @@ Owner-only:
 - home
 - flee
 - tasks
+- shadow
 - inventoryRead
 - equipment
 - eating
@@ -241,6 +258,8 @@ Important notes:
 - Home protection still blocks risky mining near home.
 - While wandering, mining/harvesting/combat/building/container/crafting actions are blocked.
 - Task system is one-shot only and does not add autonomous loops.
+- Shadow mode is observation-only and does not execute body actions.
+- Shadow response `actions` are ignored in v0.12.
 
 ## Harvesting (v0.9)
 
@@ -250,22 +269,53 @@ Important notes:
 - If `REQUIRE_MATURE_CROPS=true`, unknown/immature crop age is refused.
 - `REPLANT_CROPS=false` means no replant behavior yet.
 
-## AI Bridge Stub
+## Shadow Mode (v0.12)
 
-- `ENABLE_AI_BRIDGE=false` means observation sends are skipped.
-- If enabled later, observations are POSTed to `AI_BRIDGE_URL`.
-- AI-requested actions still pass safety validation.
+Shadow mode sends observation snapshots to the EMBER app and records what EMBER would do, without executing body actions.
 
-Observation snapshot now includes:
+- Shadow control flag: `ENABLE_AI_SHADOW`
+- Shadow endpoint: `SHADOW_BRIDGE_URL`
+- Shadow auth: `SHADOW_BRIDGE_TOKEN` (never logged)
+- Shadow interval: `SHADOW_OBSERVATION_INTERVAL_MS`
+- Shadow timeout: `SHADOW_TIMEOUT_MS`
+- Shadow moving behavior: `SHADOW_SEND_WHILE_MOVING`
+- Shadow response logging: `SHADOW_LOG_RESPONSE`
+- Shadow chat summary toggle: `SHADOW_CHAT_SUMMARY` (default `false`)
 
-- rounded vitals
-- equipment summary
-- food summary
-- mining and harvesting capability summaries
-- visible and mineable ores
-- current target block summary
-- home protection and safety flags
-- yard state summary (home center/radius, inside-radius, safety summary, active/steps/stop-reason)
+Shadow endpoints are expected to return data like:
+
+```json
+{
+  "mode": "shadow",
+  "executed": false,
+  "reply": "I would step back and reassess.",
+  "wouldDo": "Move to safer ground near home.",
+  "confidence": "medium",
+  "allowedActionTypes": [],
+  "actions": [],
+  "logId": "optional-id"
+}
+```
+
+Behavior guarantees in v0.12:
+
+- Shadow response `actions` are ignored.
+- No action queue entries are created from shadow responses.
+- `executed=true` is logged as warning and still not executed.
+- If the endpoint is offline or invalid, bot continues running.
+
+## AI Bridge vs Shadow
+
+- `ENABLE_AI_BRIDGE` is the separate action bridge path (disabled by default).
+- `ENABLE_AI_SHADOW` is observation-only shadow mode.
+- Keep `ENABLE_AI_BRIDGE=false` when using shadow-only operation.
+
+## Shadow Commands
+
+- `Ember shadow status`: enabled/configured state, bridge host+path, send/response/error counters.
+- `Ember shadow last`: last reply/wouldDo/confidence/logId.
+- `Ember shadow test`: owner-triggered single shadow send (no action execution).
+- `Ember shadow summary`: one-line shadow health summary.
 
 ## Yard Wandering (v0.10.2)
 

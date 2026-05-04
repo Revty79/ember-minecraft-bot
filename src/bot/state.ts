@@ -36,6 +36,7 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     flee: config.allowFlee,
     wandering: config.allowWander,
     tasks: config.enableTaskSystem,
+    shadow: config.enableAiShadow,
     inventoryRead: true,
     equipment: config.allowEquip,
     eating: config.allowEating,
@@ -124,6 +125,17 @@ function createInitialState(config: AppConfig): BotState {
     aiBridgeEnabled: config.enableAiBridge,
     aiBridgeUrl: config.enableAiBridge ? config.aiBridgeUrl ?? null : null,
     lastAiBridgeError: null,
+    shadowEnabled: config.enableAiShadow,
+    shadowBridgeUrl: config.shadowBridgeUrl ?? null,
+    shadowLastSentAt: null,
+    shadowLastResponseAt: null,
+    shadowLastError: null,
+    shadowLastReply: null,
+    shadowLastWouldDo: null,
+    shadowLastConfidence: null,
+    shadowLastLogId: null,
+    shadowSendCount: 0,
+    shadowErrorCount: 0,
     actionQueueLength: 0,
     runningAction: null,
     blockedReason: null
@@ -307,6 +319,34 @@ export function createStateStore(config: AppConfig): StateStore {
     state.lastAiBridgeError = message;
   }
 
+  function setShadowState(
+    shadow: Partial<{
+      shadowEnabled: boolean;
+      shadowBridgeUrl: string | null;
+      shadowLastSentAt: string | null;
+      shadowLastResponseAt: string | null;
+      shadowLastError: string | null;
+      shadowLastReply: string | null;
+      shadowLastWouldDo: string | null;
+      shadowLastConfidence: BotState["shadowLastConfidence"];
+      shadowLastLogId: string | null;
+      shadowSendCount: number;
+      shadowErrorCount: number;
+    }>
+  ): void {
+    if (shadow.shadowEnabled !== undefined) state.shadowEnabled = shadow.shadowEnabled;
+    if (shadow.shadowBridgeUrl !== undefined) state.shadowBridgeUrl = shadow.shadowBridgeUrl;
+    if (shadow.shadowLastSentAt !== undefined) state.shadowLastSentAt = shadow.shadowLastSentAt;
+    if (shadow.shadowLastResponseAt !== undefined) state.shadowLastResponseAt = shadow.shadowLastResponseAt;
+    if (shadow.shadowLastError !== undefined) state.shadowLastError = shadow.shadowLastError;
+    if (shadow.shadowLastReply !== undefined) state.shadowLastReply = shadow.shadowLastReply;
+    if (shadow.shadowLastWouldDo !== undefined) state.shadowLastWouldDo = shadow.shadowLastWouldDo;
+    if (shadow.shadowLastConfidence !== undefined) state.shadowLastConfidence = shadow.shadowLastConfidence;
+    if (shadow.shadowLastLogId !== undefined) state.shadowLastLogId = shadow.shadowLastLogId;
+    if (shadow.shadowSendCount !== undefined) state.shadowSendCount = shadow.shadowSendCount;
+    if (shadow.shadowErrorCount !== undefined) state.shadowErrorCount = shadow.shadowErrorCount;
+  }
+
   function setActionQueueInfo(queueLength: number, runningAction: string | null): void {
     state.actionQueueLength = queueLength;
     state.runningAction = runningAction;
@@ -370,6 +410,7 @@ export function createStateStore(config: AppConfig): StateStore {
     setLastChatTimestamp,
     setLastCommandReceived,
     setAiBridgeError,
+    setShadowState,
     setActionQueueInfo,
     setBlockedReason,
     getBotSnapshot,

@@ -26,6 +26,8 @@ import type {
   MovementMode,
   PerceptionController,
   SafetyLayer,
+  ShadowBridgeStatus,
+  ShadowSendOutcome,
   StateStore,
   TaskName,
   TaskState
@@ -192,6 +194,23 @@ function toWhole(value: number | null | undefined): string {
   return Math.round(value).toString();
 }
 
+function summarizeText(value: string | null | undefined, maxLength = 90): string {
+  if (!value) return "none";
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function formatBridgeUrlForChat(urlText: string | null): string {
+  if (!urlText) return "none";
+  try {
+    const parsed = new URL(urlText);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return urlText.replace(/^https?:\/\//i, "");
+  }
+}
+
 function taskLabel(task: TaskName): string {
   switch (task) {
     case "go_home":
@@ -279,7 +298,9 @@ export function createActionController(
   perception: PerceptionController,
   safety: SafetyLayer,
   logger: Logger,
-  getAiStatus: () => AiBridgeStatus
+  getAiStatus: () => AiBridgeStatus,
+  getShadowStatus: () => ShadowBridgeStatus,
+  sendShadowObservation: () => Promise<ShadowSendOutcome>
 ): ActionController {
   const queue: ActionQueueItem[] = [];
   let actionId = 0;
@@ -1529,7 +1550,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: task go home/follow owner/eat if hungry/wander once/harvest once/mine once, task report, task stop, target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: task go home/follow owner/eat if hungry/wander once/harvest once/mine once, task report, task stop, target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, shadow status, shadow last, shadow test, shadow summary, action queue.",
           "help"
         );
         return true;
@@ -1598,6 +1619,85 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_SHADOW_STATUS": {
+        const shadowStatus = getShadowStatus();
+        const bridge = formatBridgeUrlForChat(shadowStatus.url);
+        const lastSent = shadowStatus.lastSentAt ?? "never";
+        const lastResponse = shadowStatus.lastResponseAt ?? "never";
+        const confidence = shadowStatus.lastConfidence ?? "none";
+        const lastError = summarizeText(shadowStatus.lastError, 70);
+        const configured = shadowStatus.configured ? "true" : "false";
+        const inFlight = shadowStatus.inFlight ? "yes" : "no";
+
+        chat.send(
+          `Shadow: enabled=${String(shadowStatus.enabled)}, configured=${configured}, bridge=${bridge}, lastSent=${lastSent}, lastResponse=${lastResponse}, confidence=${confidence}, sends=${shadowStatus.sendCount}, errors=${shadowStatus.errorCount}, inFlight=${inFlight}, lastError=${lastError}.`,
+          "shadow-status"
+        );
+        return true;
+      }
+
+      case "REPORT_SHADOW_LAST": {
+        const shadowStatus = getShadowStatus();
+        const hasAny =
+          Boolean(shadowStatus.lastReply) ||
+          Boolean(shadowStatus.lastWouldDo) ||
+          Boolean(shadowStatus.lastConfidence) ||
+          Boolean(shadowStatus.lastLogId);
+
+        if (!hasAny) {
+          chat.send("No shadow response yet.", "shadow-last-empty");
+          return true;
+        }
+
+        const reply = summarizeText(shadowStatus.lastReply, 100);
+        const wouldDo = summarizeText(shadowStatus.lastWouldDo, 100);
+        const confidence = shadowStatus.lastConfidence ?? "none";
+        const logId = shadowStatus.lastLogId ?? "none";
+        chat.send(
+          `Shadow last: reply=${reply}; wouldDo=${wouldDo}; confidence=${confidence}; logId=${logId}.`,
+          "shadow-last"
+        );
+        return true;
+      }
+
+      case "REPORT_SHADOW_TEST": {
+        const shadowStatus = getShadowStatus();
+        if (!shadowStatus.enabled) {
+          chat.send("Shadow mode is disabled by safety settings.", "shadow-test-disabled");
+          return true;
+        }
+
+        if (!shadowStatus.configured) {
+          chat.send("Shadow bridge is not configured.", "shadow-test-unconfigured");
+          return true;
+        }
+
+        const result = await sendShadowObservation();
+        if (result.code === "sent") {
+          const status = getShadowStatus();
+          const confidence = status.lastConfidence ?? "none";
+          chat.send(`Shadow test complete: sent=true, confidence=${confidence}.`, "shadow-test-success");
+          return true;
+        }
+
+        chat.send(`Shadow test result: ${summarizeText(result.message, 120)}.`, "shadow-test-result");
+        return true;
+      }
+
+      case "REPORT_SHADOW_SUMMARY": {
+        const shadowStatus = getShadowStatus();
+        const confidence = shadowStatus.lastConfidence ?? "none";
+        const lastSent = shadowStatus.lastSentAt ?? "never";
+        const lastError = summarizeText(shadowStatus.lastError, 55);
+        chat.send(
+          `Shadow summary: enabled=${String(shadowStatus.enabled)}, configured=${String(
+            shadowStatus.configured
+          )}, sent=${shadowStatus.sendCount}, errors=${shadowStatus.errorCount}, confidence=${confidence}, lastSent=${lastSent}, lastError=${lastError}.`,
+          "shadow-summary"
+        );
+        return true;
+      }
+
       case "REPORT_ACTION_QUEUE": {
         const summary = getActionQueueSummary();
         chat.send(
@@ -1627,9 +1727,11 @@ export function createActionController(
         chat.send(
           `Capabilities: movement=${String(caps.movement)}, perception=${String(caps.perception)}, home=${String(
             caps.home
-          )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, tasks=${String(caps.tasks)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
-            caps.equipment
-          )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, harvesting=${String(
+          )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, tasks=${String(caps.tasks)}, shadow=${String(
+            caps.shadow
+          )}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(caps.equipment)}, eating=${String(
+            caps.eating
+          )}, mining=${String(caps.mining)}, harvesting=${String(
             caps.harvesting
           )}, cropHarvesting=${String(caps.cropHarvesting)}, combat=${String(caps.combat)}, building=${String(
             caps.building
@@ -2307,10 +2409,11 @@ export function createActionController(
         const equipWord = equip.allowed ? "allowed" : "blocked";
         const wanderingWord = wandering.allowed ? "allowed" : "blocked";
         const tasksWord = tasks.allowed ? "allowed" : "blocked";
+        const shadowWord = config.enableAiShadow ? "allowed" : "blocked";
         const aiWord = config.enableAiBridge ? "allowed" : "blocked";
         const inventoryReadWord = "allowed";
 
-        const result = `Safety test: tasks ${tasksWord}, eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
+        const result = `Safety test: tasks ${tasksWord}, eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, shadow ${shadowWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
@@ -2323,7 +2426,9 @@ export function createActionController(
           eating,
           equip,
           wandering,
-          tasks
+          tasks,
+          shadow: config.enableAiShadow,
+          ai: config.enableAiBridge
         });
         chat.send(result, "safety-test");
         return true;
