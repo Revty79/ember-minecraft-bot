@@ -35,6 +35,7 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     home: true,
     flee: config.allowFlee,
     inventoryRead: true,
+    equipment: config.allowEquip,
     eating: config.allowEating,
     mining: config.allowMining,
     combat: config.allowCombat,
@@ -92,6 +93,7 @@ function createInitialState(config: AppConfig): BotState {
       allowBuilding: config.allowBuilding,
       allowInventory: config.allowInventory,
       allowEating: config.allowEating,
+      allowEquip: config.allowEquip,
       allowFlee: config.allowFlee
     },
     aiBridgeEnabled: config.enableAiBridge,

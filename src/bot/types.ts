@@ -10,6 +10,7 @@ export type LogPrefix =
   | "safety"
   | "move"
   | "pathfinder"
+  | "mining"
   | "perception"
   | "ai"
   | "state"
@@ -45,6 +46,12 @@ export interface EntitySummary {
 export interface BlockSummary {
   name: string;
   count: number;
+}
+
+export interface NearbyBlockTarget {
+  name: string;
+  position: Vec3Snapshot;
+  distance: number;
 }
 
 export interface ObstacleBlockInfo {
@@ -102,11 +109,45 @@ export interface InventorySummary {
   foodItems: FoodItemSummary[];
 }
 
-export type BlockClass = "air" | "passable" | "solid" | "fluid" | "ore" | "log" | "dirt" | "stone" | "unknown";
+export type BlockClass =
+  | "air"
+  | "passable"
+  | "solid"
+  | "fluid"
+  | "ore"
+  | "dirt"
+  | "stone"
+  | "log"
+  | "leaves"
+  | "container"
+  | "utility"
+  | "dangerous"
+  | "forbidden"
+  | "unknown";
 
 export interface ClassifiedBlock {
   name: string | null;
   classification: BlockClass;
+}
+
+export interface ToolSummary {
+  pickaxe: string | null;
+  shovel: string | null;
+  axe: string | null;
+  weapon: string | null;
+}
+
+export interface ArmorSummary {
+  head: string | null;
+  torso: string | null;
+  legs: string | null;
+  feet: string | null;
+}
+
+export interface EquipmentSummary {
+  heldItem: string | null;
+  tools: ToolSummary;
+  armor: ArmorSummary;
 }
 
 export interface CapabilitySummary {
@@ -115,6 +156,7 @@ export interface CapabilitySummary {
   home: boolean;
   flee: boolean;
   inventoryRead: boolean;
+  equipment: boolean;
   eating: boolean;
   mining: boolean;
   combat: boolean;
@@ -163,6 +205,7 @@ export interface SafetyFlags {
   allowBuilding: boolean;
   allowInventory: boolean;
   allowEating: boolean;
+  allowEquip: boolean;
   allowFlee: boolean;
 }
 
@@ -267,18 +310,21 @@ export type BotAction =
   | { type: "REPORT_DANGER" }
   | { type: "REPORT_THREAT" }
   | { type: "REPORT_INVENTORY" }
+  | { type: "REPORT_EQUIPMENT" }
   | { type: "REPORT_FOOD" }
   | { type: "REPORT_MOVEMENT" }
   | { type: "REPORT_BLOCK" }
   | { type: "REPORT_ORES_NEARBY" }
+  | { type: "REPORT_ORE_REPORT" }
   | { type: "REPORT_HOME_STATUS" }
   | { type: "REPORT_SAFETY_TEST" }
-  | { type: "MINE_BLOCK"; blockName?: string }
+  | { type: "MINE_BLOCK"; blockName?: string; mode?: "front" | "ore" }
+  | { type: "STOP_MINING" }
   | { type: "ATTACK_ENTITY"; entityName?: string }
   | { type: "PLACE_BLOCK"; blockName?: string }
   | { type: "OPEN_INVENTORY" }
-  | { type: "EQUIP_ITEM"; itemName?: string }
-  | { type: "EAT_FOOD"; itemName?: string };
+  | { type: "EQUIP_ITEM"; itemName?: string; category?: "food" | "pickaxe" | "shovel" | "axe" }
+  | { type: "EAT_FOOD"; itemName?: string; force?: boolean };
 
 export interface ActionQueueItem {
   id: number;
@@ -302,6 +348,23 @@ export interface AiObservation {
   timestamp: string;
   bot: BotSnapshot;
   perception: PerceptionSnapshot;
+  survival: {
+    equipment: EquipmentSummary;
+    food: FoodItemSummary[];
+    mining: {
+      enabled: boolean;
+      allowedBlocks: string[];
+      forbiddenBlocks: string[];
+      maxDistance: number;
+      homeProtectionRadius: number;
+    };
+    visibleOres: BlockSummary[];
+    mineableOres: BlockSummary[];
+    homeProtection: {
+      enabled: boolean;
+      homeSet: boolean;
+    };
+  };
   actionQueue: ActionQueueSummary;
   recentEvents: BotEvent[];
 }
@@ -421,6 +484,7 @@ export interface PerceptionController {
   getNearbyBlocksSummary: (radius: number) => BlockSummary[];
   getNearbyBlocksByName: (name: string, radius: number) => BlockSummary[];
   getNearbyOresSummary: (radius: number) => BlockSummary[];
+  getNearestOre: (radius: number) => NearbyBlockTarget | null;
   classifyBlock: (blockName: string | null) => BlockClass;
   getBlockInFront: () => ClassifiedBlock;
   getImmediateObstacles: () => ImmediateObstacleReport;

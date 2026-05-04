@@ -1,6 +1,17 @@
-﻿import type { Bot } from "mineflayer";
+import type { Bot } from "mineflayer";
+import { goals } from "mineflayer-pathfinder";
 import type { AppConfig } from "../config";
-import { getFoodItems, getInventorySummary, pickBestFoodItem } from "./inventory";
+import { Vec3 } from "vec3";
+import {
+  getArmorSummary,
+  getBestAxe,
+  getBestPickaxe,
+  getBestShovel,
+  getEquipmentSummary,
+  getFoodItems,
+  getInventorySummary,
+  pickBestFoodItem
+} from "./inventory";
 import type {
   ActionController,
   ActionQueueItem,
@@ -24,15 +35,15 @@ const MOVEMENT_ACTION_TYPES = new Set<BotAction["type"]>([
   "GO_HOME",
   "SET_STAY_HOME",
   "FLEE_DANGER",
+  "MINE_BLOCK",
+  "STOP_MINING",
   "LOOK_AT_OWNER"
 ]);
 
 const SCAFFOLDED_CAPABILITY_ACTIONS = new Set<BotAction["type"]>([
-  "MINE_BLOCK",
   "ATTACK_ENTITY",
   "PLACE_BLOCK",
-  "OPEN_INVENTORY",
-  "EQUIP_ITEM"
+  "OPEN_INVENTORY"
 ]);
 
 function nowIso(): string {
@@ -65,6 +76,14 @@ function describeAction(action: BotAction): string {
       return "SET_STAY_HOME";
     case "FLEE_DANGER":
       return "FLEE_DANGER";
+    case "MINE_BLOCK":
+      return "MINE_BLOCK";
+    case "STOP_MINING":
+      return "STOP_MINING";
+    case "EQUIP_ITEM":
+      return "EQUIP_ITEM";
+    case "EAT_FOOD":
+      return "EAT_FOOD";
     case "RECOVER":
       return "RECOVER";
     default:
@@ -112,6 +131,65 @@ function movementModeLabel(mode: MovementMode, stuckCount: number): string {
   return mode;
 }
 
+const ORE_NAMES = new Set<string>([
+  "coal_ore",
+  "deepslate_coal_ore",
+  "iron_ore",
+  "deepslate_iron_ore",
+  "copper_ore",
+  "deepslate_copper_ore",
+  "gold_ore",
+  "deepslate_gold_ore",
+  "redstone_ore",
+  "deepslate_redstone_ore",
+  "lapis_ore",
+  "deepslate_lapis_ore",
+  "diamond_ore",
+  "deepslate_diamond_ore",
+  "emerald_ore",
+  "deepslate_emerald_ore",
+  "nether_gold_ore",
+  "nether_quartz_ore",
+  "ancient_debris"
+]);
+
+const STONE_LIKE_NAMES = new Set<string>([
+  "stone",
+  "cobblestone",
+  "deepslate",
+  "cobbled_deepslate",
+  "blackstone"
+]);
+
+const FORBIDDEN_NAME_HINTS = ["chest", "barrel", "door", "trapdoor", "bed", "furnace", "crafting_table"];
+
+function normalizeItemName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizePickaxeTier(pickaxeName: string | null): number {
+  const name = normalizeItemName(pickaxeName);
+  if (!name) return 0;
+  if (name.includes("netherite_pickaxe")) return 6;
+  if (name.includes("diamond_pickaxe")) return 5;
+  if (name.includes("iron_pickaxe")) return 4;
+  if (name.includes("stone_pickaxe")) return 3;
+  if (name.includes("golden_pickaxe")) return 2;
+  if (name.includes("wooden_pickaxe")) return 1;
+  return 0;
+}
+
+function requiredPickaxeTierForBlock(blockName: string): number {
+  const name = blockName.toLowerCase();
+  if (name.includes("diamond_ore") || name.includes("emerald_ore") || name.includes("gold_ore")) return 4;
+  if (name.includes("redstone_ore") || name.includes("iron_ore") || name.includes("lapis_ore")) return 3;
+  if (name.includes("copper_ore") || name.includes("coal_ore")) return 1;
+  if (name.includes("stone") || name.includes("deepslate")) return 1;
+  return 0;
+}
+
 export function createActionController(
   bot: Bot,
   config: AppConfig,
@@ -126,6 +204,224 @@ export function createActionController(
   const queue: ActionQueueItem[] = [];
   let actionId = 0;
   let running: ActionQueueItem | null = null;
+  let miningActive = false;
+  let miningCancelled = false;
+  let miningTargetName: string | null = null;
+  let miningTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  function stopMiningNow(reason: string): void {
+    if (!miningActive && !miningTimeoutHandle) return;
+
+    miningCancelled = true;
+    if (miningTimeoutHandle) {
+      clearTimeout(miningTimeoutHandle);
+      miningTimeoutHandle = null;
+    }
+    try {
+      bot.stopDigging();
+    } catch {
+      // ignore stopDigging errors
+    }
+    try {
+      bot.pathfinder.stop();
+      bot.pathfinder.setGoal(null);
+    } catch {
+      // ignore pathfinder stop errors
+    }
+    movement.clearMovementState(`mining-stop:${reason}`);
+    miningActive = false;
+    const target = miningTargetName;
+    miningTargetName = null;
+    logger.warn("action", `mining stopped reason=${reason} target=${target ?? "none"}`);
+  }
+
+  function hasDangerForMining(): boolean {
+    const danger = perception.getDangerSummary(config.hostileDangerRadius);
+    state.setDangerSummary(danger);
+    return danger.proximity === "close" || danger.proximity === "critical";
+  }
+
+  function hasLowHealthForMining(): boolean {
+    return Number.isFinite(bot.health) && bot.health <= config.lowHealthStopThreshold;
+  }
+
+  function isValidMiningBlockName(name: string): boolean {
+    const normalized = name.toLowerCase();
+    if (config.miningForbiddenBlocks.includes(normalized)) return false;
+    for (const hint of FORBIDDEN_NAME_HINTS) {
+      if (normalized.includes(hint)) return false;
+    }
+    return config.miningAllowedBlocks.includes(normalized);
+  }
+
+  function requiresPickaxeForBlock(name: string): boolean {
+    const normalized = name.toLowerCase();
+    if (ORE_NAMES.has(normalized)) {
+      return config.requireToolForOres;
+    }
+    if (STONE_LIKE_NAMES.has(normalized) || normalized.includes("stone") || normalized.includes("deepslate")) {
+      return config.requireToolForStone;
+    }
+    return false;
+  }
+
+  function validateTargetSafety(blockPosition: Vec3, blockName: string): { allowed: boolean; reason?: string } {
+    if (!state.state.alive) {
+      return { allowed: false, reason: "I am not alive right now." };
+    }
+
+    if (!movement.isEntityPositionHealthy() || !isFinitePosition(bot.entity?.position)) {
+      return { allowed: false, reason: "My position is not valid for mining yet." };
+    }
+
+    if (hasDangerForMining()) {
+      return { allowed: false, reason: "It is not safe to mine right now." };
+    }
+
+    if (hasLowHealthForMining()) {
+      return { allowed: false, reason: "My health is too low for mining." };
+    }
+
+    if (state.state.food !== null && state.state.food < config.lowFoodEatThreshold) {
+      return { allowed: false, reason: "My food is too low for safe mining." };
+    }
+
+    const distance = bot.entity.position.distanceTo(blockPosition);
+    if (distance > config.miningMaxDistance) {
+      return { allowed: false, reason: "That block is too far away to mine safely." };
+    }
+
+    if (!isValidMiningBlockName(blockName)) {
+      return { allowed: false, reason: "That block is not in my safe mining list." };
+    }
+
+    const botFloor = bot.entity.position.floored();
+    if (
+      blockPosition.x === botFloor.x &&
+      blockPosition.z === botFloor.z &&
+      (blockPosition.y === botFloor.y || blockPosition.y === botFloor.y + 1 || blockPosition.y < botFloor.y)
+    ) {
+      return { allowed: false, reason: "I will not mine blocks at or below my own position." };
+    }
+
+    const home = state.state.homeRecord
+      ? new Vec3(state.state.homeRecord.x, state.state.homeRecord.y, state.state.homeRecord.z)
+      : state.state.homePosition
+        ? new Vec3(state.state.homePosition.x, state.state.homePosition.y, state.state.homePosition.z)
+        : null;
+    if (home) {
+      const homeDistance = home.distanceTo(blockPosition);
+      if (homeDistance <= config.homeProtectionRadius) {
+        return { allowed: false, reason: "I will not mine inside my home area yet." };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  async function moveNearBlock(blockPosition: Vec3): Promise<boolean> {
+    if (!isFinitePosition(bot.entity?.position)) return false;
+    const currentDistance = bot.entity.position.distanceTo(blockPosition);
+    if (currentDistance <= 3) {
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let resolved = false;
+      const done = (value: boolean): void => {
+        if (resolved) return;
+        resolved = true;
+        bot.removeListener("goal_reached", onGoalReached);
+        bot.removeListener("path_reset", onPathReset);
+        resolve(value);
+      };
+
+      const onGoalReached = (): void => {
+        done(true);
+      };
+      const onPathReset = (reason: unknown): void => {
+        if (String(reason) === "stuck") {
+          done(false);
+        }
+      };
+
+      bot.on("goal_reached", onGoalReached);
+      bot.on("path_reset", onPathReset);
+      bot.pathfinder.setGoal(new goals.GoalNear(blockPosition.x, blockPosition.y, blockPosition.z, 2), false);
+
+      const timeout = setTimeout(() => {
+        done(false);
+      }, Math.min(config.miningTimeoutMs, 6000));
+      timeout.unref();
+    });
+  }
+
+  async function equipRequiredToolForBlock(blockName: string): Promise<{ ok: boolean; reason?: string }> {
+    if (!requiresPickaxeForBlock(blockName)) {
+      return { ok: true };
+    }
+
+    const bestPickaxe = getBestPickaxe(bot);
+    if (!bestPickaxe) {
+      return { ok: false, reason: "I need a pickaxe for that block." };
+    }
+
+    const requiredTier = requiredPickaxeTierForBlock(blockName);
+    const availableTier = normalizePickaxeTier(bestPickaxe.name);
+    if (requiredTier > 0 && availableTier < requiredTier) {
+      return { ok: false, reason: "My pickaxe is not strong enough for that block." };
+    }
+
+    if (!config.allowEquip) {
+      return { ok: false, reason: "Equipment use is disabled by safety settings." };
+    }
+
+    try {
+      await bot.equip(bestPickaxe, "hand");
+      logger.log("action", `equipped ${bestPickaxe.name} for mining`);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, reason: `Failed to equip tool: ${message}` };
+    }
+  }
+
+  function getMineableOreSummary(radius: number): { ores: { name: string; count: number }[]; reason: string } {
+    const visible = perception.getNearbyOresSummary(radius);
+    if (visible.length === 0) {
+      return { ores: [], reason: "none visible" };
+    }
+
+    if (!config.allowMining) {
+      return { ores: [], reason: "mining disabled" };
+    }
+    if (!state.state.alive || !movement.isEntityPositionHealthy()) {
+      return { ores: [], reason: "not ready" };
+    }
+    if (hasDangerForMining()) {
+      return { ores: [], reason: "unsafe" };
+    }
+
+    const pickaxe = getBestPickaxe(bot);
+    if (config.requireToolForOres && !pickaxe) {
+      return { ores: [], reason: "no pickaxe" };
+    }
+
+    const nearestOre = perception.getNearestOre(radius);
+    if (!nearestOre) {
+      return { ores: [], reason: "none visible" };
+    }
+    if (nearestOre.distance > config.miningMaxDistance) {
+      return { ores: [], reason: "too far" };
+    }
+
+    const allowed = visible.filter((ore) => config.miningAllowedBlocks.includes(ore.name));
+    if (allowed.length === 0) {
+      return { ores: [], reason: "not allowed list" };
+    }
+
+    return { ores: allowed, reason: "allowed" };
+  }
 
   function getActionQueueSummary(): ActionQueueSummary {
     return {
@@ -153,6 +449,13 @@ export function createActionController(
     }
 
     const safeAction = decision.action ?? action;
+    if (safeAction.type === "STOP_MINING") {
+      stopMiningNow(`requested-by-${requestedBy}`);
+      clearMovementActions("stop-mining");
+      chat.send("Mining stopped.", "mine-stop");
+      return;
+    }
+
     actionId += 1;
 
     const item: ActionQueueItem = {
@@ -270,9 +573,16 @@ export function createActionController(
       }
 
       case "STOP_MOVING": {
+        stopMiningNow("stop-command");
         clearMovementActions("stop");
         movement.stop("stop command");
         chat.send("Stopped.", "stop");
+        return true;
+      }
+
+      case "STOP_MINING": {
+        stopMiningNow("stop-mining-action");
+        chat.send("Mining stopped.", "mine-stop");
         return true;
       }
 
@@ -424,7 +734,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: inventory, food, eat, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, action queue.",
           "help"
         );
         return true;
@@ -507,9 +817,9 @@ export function createActionController(
         chat.send(
           `Capabilities: movement=${String(caps.movement)}, perception=${String(caps.perception)}, home=${String(
             caps.home
-          )}, flee=${String(caps.flee)}, inventoryRead=${String(caps.inventoryRead)}, eating=${String(
-            caps.eating
-          )}, mining=${String(caps.mining)}, combat=${String(caps.combat)}, building=${String(
+          )}, flee=${String(caps.flee)}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(
+            caps.equipment
+          )}, eating=${String(caps.eating)}, mining=${String(caps.mining)}, combat=${String(caps.combat)}, building=${String(
             caps.building
           )}, containers=${String(caps.containers)}, ai=${String(caps.ai)}.`,
           "capabilities"
@@ -595,6 +905,19 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_EQUIPMENT": {
+        const equipment = getEquipmentSummary(bot);
+        const armor = getArmorSummary(bot);
+        const armorText =
+          [armor.head, armor.torso, armor.legs, armor.feet].filter((piece) => piece !== null).join("/") || "none";
+
+        chat.send(
+          `Held: ${equipment.heldItem ?? "none"}. Pickaxe: ${equipment.tools.pickaxe ?? "none"}. Shovel: ${equipment.tools.shovel ?? "none"}. Axe: ${equipment.tools.axe ?? "none"}. Armor: ${armorText}.`,
+          "equipment"
+        );
+        return true;
+      }
+
       case "REPORT_FOOD": {
         const foodItems = getFoodItems(bot);
         logger.log("survival", "Food inventory summary", foodItems);
@@ -612,25 +935,85 @@ export function createActionController(
         return true;
       }
 
+      case "EQUIP_ITEM": {
+        if (!config.allowEquip) {
+          chat.send("Equipment use is disabled by safety settings.", "equip-disabled");
+          return false;
+        }
+
+        const category = action.category ?? normalizeItemName(action.itemName);
+        let itemToEquip = null;
+
+        if (category === "food") {
+          itemToEquip = pickBestFoodItem(bot);
+        } else if (category === "pickaxe") {
+          itemToEquip = getBestPickaxe(bot);
+        } else if (category === "shovel") {
+          itemToEquip = getBestShovel(bot);
+        } else if (category === "axe") {
+          itemToEquip = getBestAxe(bot);
+        } else {
+          const targetName = normalizeItemName(action.itemName);
+          if (targetName) {
+            itemToEquip =
+              bot.inventory
+                ?.items?.()
+                ?.find((candidate) => candidate.name.toLowerCase() === targetName) ?? null;
+          }
+        }
+
+        if (!itemToEquip) {
+          chat.send("I do not have that item to equip.", "equip-missing");
+          return false;
+        }
+
+        try {
+          await bot.equip(itemToEquip, "hand");
+          chat.send(`Equipped ${itemToEquip.name}.`, "equip-success");
+          return true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error("action", `Failed to equip ${itemToEquip.name}: ${message}`);
+          chat.send("I could not equip that item.", "equip-failed");
+          return false;
+        }
+      }
+
       case "EAT_FOOD": {
         if (!config.allowEating) {
           chat.send("Eating is disabled by safety settings.", "eat-disabled");
           return false;
         }
 
+        if (!state.state.alive) {
+          chat.send("I cannot eat while not alive.", "eat-not-alive");
+          return false;
+        }
+
+        if (!movement.isEntityPositionHealthy()) {
+          chat.send("My position is not ready for eating yet.", "eat-not-ready");
+          return false;
+        }
+
+        const isForce = action.force === true;
+        if (!isForce && state.state.food !== null && state.state.food >= 20) {
+          chat.send("I am not hungry.", "eat-not-hungry");
+          return false;
+        }
+
         const selectedFood = pickBestFoodItem(bot, action.itemName);
         if (!selectedFood) {
-          chat.send("Food: none.", "eat-no-food");
+          chat.send("I do not have food.", "eat-no-food");
           return false;
         }
 
         try {
           await bot.equip(selectedFood, "hand");
+          chat.send(`Eating ${selectedFood.name}.`, "eat-start");
           bot.activateItem();
           await sleep(1600);
           bot.deactivateItem();
           logger.log("survival", `Ate food item ${selectedFood.name}`);
-          chat.send(`Ate ${selectedFood.name}.`, "eat-success");
           return true;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -638,6 +1021,167 @@ export function createActionController(
           chat.send("I could not eat right now.", "eat-failed");
           return false;
         }
+      }
+
+      case "MINE_BLOCK": {
+        if (!config.allowMining) {
+          chat.send("Mining is disabled by safety settings.", "mine-disabled");
+          return false;
+        }
+
+        if (movement.getMode() !== "idle") {
+          movement.stop("mining-start");
+        }
+
+        if (!state.state.alive) {
+          chat.send("I cannot mine while not alive.", "mine-not-alive");
+          return false;
+        }
+
+        if (!movement.isEntityPositionHealthy() || !isFinitePosition(bot.entity?.position)) {
+          chat.send("My position is not valid for mining yet.", "mine-not-ready");
+          return false;
+        }
+
+        let targetVec: Vec3 | null = null;
+        let targetName: string | null = null;
+
+        if (action.mode === "ore") {
+          const nearestOre = perception.getNearestOre(6);
+          if (!nearestOre) {
+            chat.send("I do not see a nearby ore to mine.", "mine-ore-none");
+            return false;
+          }
+          targetVec = new Vec3(nearestOre.position.x, nearestOre.position.y, nearestOre.position.z);
+          targetName = nearestOre.name;
+        } else {
+          const obstacle = perception.getImmediateObstacles();
+          const candidates = [obstacle.blockFrontFeet.position, obstacle.blockFrontHead.position].filter(
+            (entry): entry is { x: number; y: number; z: number } => entry !== null
+          );
+          for (const candidate of candidates) {
+            const block = bot.blockAt(new Vec3(candidate.x, candidate.y, candidate.z));
+            const blockName = block?.name?.toLowerCase() ?? null;
+            if (!blockName) continue;
+            const classification = perception.classifyBlock(blockName);
+            if (classification === "air" || classification === "passable" || classification === "fluid") continue;
+            targetVec = new Vec3(candidate.x, candidate.y, candidate.z);
+            targetName = blockName;
+            break;
+          }
+        }
+
+        if (!targetVec || !targetName) {
+          chat.send("No safe front block found to mine.", "mine-no-target");
+          return false;
+        }
+
+        const safety = validateTargetSafety(targetVec, targetName);
+        if (!safety.allowed) {
+          if (action.mode === "ore" && safety.reason !== "I will not mine inside my home area yet.") {
+            chat.send("I can see ore, but I cannot mine it safely yet.", "mine-ore-unsafe");
+          } else {
+            chat.send(safety.reason ?? "I cannot mine that block safely.", "mine-unsafe");
+          }
+          return false;
+        }
+
+        if (action.mode === "ore") {
+          const moved = await moveNearBlock(targetVec);
+          if (!moved) {
+            stopMiningNow("move-near-failed");
+            chat.send("I can see ore, but I cannot mine it safely yet.", "mine-ore-move-failed");
+            return false;
+          }
+        }
+
+        const toolDecision = await equipRequiredToolForBlock(targetName);
+        if (!toolDecision.ok) {
+          chat.send(toolDecision.reason ?? "I cannot equip the required tool.", "mine-tool-failed");
+          return false;
+        }
+
+        const blockToDig = bot.blockAt(targetVec);
+        if (!blockToDig) {
+          chat.send("That block is no longer available.", "mine-missing-block");
+          return false;
+        }
+        if (!bot.canDigBlock(blockToDig)) {
+          chat.send("I cannot dig that block safely.", "mine-cannot-dig");
+          return false;
+        }
+
+        miningCancelled = false;
+        miningActive = true;
+        miningTargetName = blockToDig.name;
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          miningTimeoutHandle = setTimeout(() => {
+            miningCancelled = true;
+            stopMiningNow("timeout");
+            reject(new Error("mining-timeout"));
+          }, config.miningTimeoutMs);
+          miningTimeoutHandle.unref();
+        });
+
+        let cancelledReason = "";
+        const safetyMonitor = setInterval(() => {
+          if (!movement.isEntityPositionHealthy()) {
+            cancelledReason = "invalid-position";
+            miningCancelled = true;
+          } else if (hasDangerForMining()) {
+            cancelledReason = "danger";
+            miningCancelled = true;
+          } else if (hasLowHealthForMining()) {
+            cancelledReason = "low-health";
+            miningCancelled = true;
+          }
+
+          if (miningCancelled) {
+            stopMiningNow(cancelledReason || "cancelled");
+          }
+        }, 250);
+        safetyMonitor.unref();
+
+        try {
+          await bot.lookAt(targetVec.offset(0.5, 0.5, 0.5), true);
+          logger.log(
+            "mining",
+            `start block=${blockToDig.name} pos=(${targetVec.x},${targetVec.y},${targetVec.z})`
+          );
+          await Promise.race([bot.dig(blockToDig, true), timeoutPromise]);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.warn("mining", `dig failed: ${message}`);
+          if (!miningCancelled) {
+            chat.send("I could not mine that block.", "mine-failed");
+          }
+          miningActive = false;
+          if (miningTimeoutHandle) {
+            clearTimeout(miningTimeoutHandle);
+            miningTimeoutHandle = null;
+          }
+          clearInterval(safetyMonitor);
+          return false;
+        }
+
+        clearInterval(safetyMonitor);
+        if (miningTimeoutHandle) {
+          clearTimeout(miningTimeoutHandle);
+          miningTimeoutHandle = null;
+        }
+
+        if (miningCancelled) {
+          chat.send("Mining stopped for safety.", "mine-stopped-safety");
+          miningActive = false;
+          miningTargetName = null;
+          return false;
+        }
+
+        miningActive = false;
+        miningTargetName = null;
+        chat.send(`Mined ${blockToDig.name}.`, "mine-success");
+        return true;
       }
 
       case "REPORT_BLOCK": {
@@ -668,6 +1212,29 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_ORE_REPORT": {
+        const visibleOres = perception.getNearbyOresSummary(6);
+        const visibleText =
+          visibleOres.length === 0
+            ? "none"
+            : visibleOres
+                .slice(0, 6)
+                .map((ore) => `${ore.name} x${ore.count}`)
+                .join(", ");
+
+        const mineable = getMineableOreSummary(6);
+        const mineableText =
+          mineable.ores.length === 0
+            ? `none (${mineable.reason})`
+            : mineable.ores
+                .slice(0, 6)
+                .map((ore) => `${ore.name} x${ore.count}`)
+                .join(", ");
+
+        chat.send(`Visible ores: ${visibleText}. Mineable now: ${mineableText}.`, "ore-report");
+        return true;
+      }
+
       case "REPORT_HOME_STATUS": {
         const home = state.state.homeRecord;
         if (!home) {
@@ -692,28 +1259,32 @@ export function createActionController(
         const building = safety.validateAction(item.requestedBy, { type: "PLACE_BLOCK" }, { dryRun: true });
         const inventory = safety.validateAction(item.requestedBy, { type: "OPEN_INVENTORY" }, { dryRun: true });
         const eating = safety.validateAction(item.requestedBy, { type: "EAT_FOOD" }, { dryRun: true });
+        const equip = safety.validateAction(item.requestedBy, { type: "EQUIP_ITEM", category: "pickaxe" }, { dryRun: true });
 
         const miningWord = mining.allowed ? "allowed" : "blocked";
         const combatWord = combat.allowed ? "allowed" : "blocked";
         const buildingWord = building.allowed ? "allowed" : "blocked";
         const inventoryWord = inventory.allowed ? "allowed" : "blocked";
         const eatingWord = eating.allowed ? "allowed" : "blocked";
+        const equipWord = equip.allowed ? "allowed" : "blocked";
 
         const result =
           miningWord === "blocked" &&
           combatWord === "blocked" &&
           buildingWord === "blocked" &&
           inventoryWord === "blocked" &&
-          eatingWord === "blocked"
+          eatingWord === "blocked" &&
+          equipWord === "blocked"
             ? "Safety test: mining blocked, combat blocked, building blocked, inventory blocked."
-            : `Safety test: mining ${miningWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}, eating ${eatingWord}.`;
+            : `Safety test: mining ${miningWord}, equip ${equipWord}, eating ${eatingWord}, combat ${combatWord}, building ${buildingWord}, inventory ${inventoryWord}.`;
 
         logger.log("safety", "Safety test results", {
           mining,
           combat,
           building,
           inventory,
-          eating
+          eating,
+          equip
         });
         chat.send(result, "safety-test");
         return true;
@@ -741,3 +1312,5 @@ export function createActionController(
     getActionQueueSummary
   };
 }
+
+

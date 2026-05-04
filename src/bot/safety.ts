@@ -4,8 +4,9 @@ import type { BotAction, Logger, SafetyDecision, SafetyLayer, StateStore } from 
 const MINING_ACTIONS = new Set<BotAction["type"]>(["MINE_BLOCK"]);
 const COMBAT_ACTIONS = new Set<BotAction["type"]>(["ATTACK_ENTITY"]);
 const BUILDING_ACTIONS = new Set<BotAction["type"]>(["PLACE_BLOCK"]);
-const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY", "EQUIP_ITEM"]);
+const INVENTORY_ACTIONS = new Set<BotAction["type"]>(["OPEN_INVENTORY"]);
 const EATING_ACTIONS = new Set<BotAction["type"]>(["EAT_FOOD"]);
+const EQUIP_ACTIONS = new Set<BotAction["type"]>(["EQUIP_ITEM"]);
 const FLEE_ACTIONS = new Set<BotAction["type"]>(["FLEE_DANGER"]);
 
 export function createSafetyLayer(config: AppConfig, state: StateStore, logger: Logger): SafetyLayer {
@@ -22,6 +23,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "GO_HOME",
     "SET_STAY_HOME",
     "FLEE_DANGER",
+    "MINE_BLOCK",
+    "STOP_MINING",
+    "EQUIP_ITEM",
+    "EAT_FOOD",
     "CLEAR_HOME",
     "RECOVER",
     "REPORT_STATE",
@@ -33,11 +38,13 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_HOME_STATUS",
     "REPORT_SAFETY_TEST",
     "REPORT_INVENTORY",
+    "REPORT_EQUIPMENT",
     "REPORT_FOOD",
     "REPORT_HUNGER",
     "REPORT_THREAT",
     "REPORT_BLOCK",
-    "REPORT_ORES_NEARBY"
+    "REPORT_ORES_NEARBY",
+    "REPORT_ORE_REPORT"
   ]);
 
   function isOwner(username: string): boolean {
@@ -85,7 +92,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
 
   function validateCapabilityFlags(action: BotAction, requestor: string): SafetyDecision {
     if (!config.allowMining && MINING_ACTIONS.has(action.type)) {
-      return reject("Mining actions are disabled by policy.", requestor, action);
+      return reject("Mining is disabled by safety settings.", requestor, action);
     }
 
     if (!config.allowCombat && COMBAT_ACTIONS.has(action.type)) {
@@ -104,6 +111,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
       return reject("Eating is disabled by safety settings.", requestor, action);
     }
 
+    if (!config.allowEquip && EQUIP_ACTIONS.has(action.type)) {
+      return reject("Equipment use is disabled by safety settings.", requestor, action);
+    }
+
     if (!config.allowFlee && FLEE_ACTIONS.has(action.type)) {
       return reject("Flee actions are disabled by policy.", requestor, action);
     }
@@ -120,6 +131,14 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
 
     if (ownerOnlyTypes.has(action.type) && !isOwner(requestor) && !isPrivilegedRequester(requestor)) {
       return reject("Only owner can run that action.", requestor, action);
+    }
+
+    if (
+      config.mineOwnerOnly &&
+      action.type === "MINE_BLOCK" &&
+      !isOwner(requestor)
+    ) {
+      return reject("Only owner can run mining actions.", requestor, action);
     }
 
     const capabilityDecision = validateCapabilityFlags(action, requestor);

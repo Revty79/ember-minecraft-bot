@@ -154,8 +154,18 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember equipment") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_EQUIPMENT" }, "equipment");
+      return;
+    }
+
     if (normalized === "ember food") {
       queueOwnerOnlyCommand(username, { type: "REPORT_FOOD" }, "food");
+      return;
+    }
+
+    if (normalized === "ember eat force") {
+      queueOwnerOnlyCommand(username, { type: "EAT_FOOD", force: true }, "eat-force");
       return;
     }
 
@@ -164,8 +174,48 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember equip food") {
+      queueOwnerOnlyCommand(username, { type: "EQUIP_ITEM", category: "food" }, "equip-food");
+      return;
+    }
+
+    if (normalized === "ember equip pickaxe") {
+      queueOwnerOnlyCommand(username, { type: "EQUIP_ITEM", category: "pickaxe" }, "equip-pickaxe");
+      return;
+    }
+
+    if (normalized === "ember equip shovel") {
+      queueOwnerOnlyCommand(username, { type: "EQUIP_ITEM", category: "shovel" }, "equip-shovel");
+      return;
+    }
+
+    if (normalized === "ember equip axe") {
+      queueOwnerOnlyCommand(username, { type: "EQUIP_ITEM", category: "axe" }, "equip-axe");
+      return;
+    }
+
     if (normalized === "ember flee") {
       queueOwnerOnlyCommand(username, { type: "FLEE_DANGER" }, "flee");
+      return;
+    }
+
+    if (normalized === "ember mine stop") {
+      queueOwnerOnlyCommand(username, { type: "STOP_MINING" }, "mine-stop");
+      return;
+    }
+
+    if (normalized === "ember mine front" || normalized === "ember mine block") {
+      queueOwnerOnlyCommand(username, { type: "MINE_BLOCK", mode: "front" }, "mine-front");
+      return;
+    }
+
+    if (normalized === "ember mine ore") {
+      queueOwnerOnlyCommand(username, { type: "MINE_BLOCK", mode: "ore" }, "mine-ore");
+      return;
+    }
+
+    if (normalized === "ember ore report") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_ORE_REPORT" }, "ore-report");
       return;
     }
 

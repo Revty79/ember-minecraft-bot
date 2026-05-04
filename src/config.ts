@@ -19,7 +19,9 @@ export interface AppConfig {
   allowBuilding: boolean;
   allowInventory: boolean;
   allowEating: boolean;
+  allowEquip: boolean;
   allowFlee: boolean;
+  mineOwnerOnly: boolean;
   profilesFolder: string;
 
   maxComeDistance: number;
@@ -46,6 +48,15 @@ export interface AppConfig {
   fleeHomeRadius: number;
   fleeToHome: boolean;
   fleeToOwner: boolean;
+  miningMaxDistance: number;
+  miningTimeoutMs: number;
+  miningAllowedBlocks: string[];
+  miningForbiddenBlocks: string[];
+  requireToolForStone: boolean;
+  requireToolForOres: boolean;
+  lowHealthStopThreshold: number;
+  lowFoodEatThreshold: number;
+  homeProtectionRadius: number;
 
   chatMinIntervalMs: number;
   spawnAnnounceDelayMs: number;
@@ -109,6 +120,15 @@ function readBoolean(name: string, fallback: boolean): boolean {
   throw new Error(`Invalid boolean value for ${name}: "${value}"`);
 }
 
+function readCsvList(name: string, fallback: string[]): string[] {
+  const value = process.env[name]?.trim();
+  const raw = value && value.length > 0 ? value : fallback.join(",");
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
 export function loadConfig(): AppConfig {
   const minecraftHost = readEnv("MINECRAFT_HOST", "10.0.0.218");
   const minecraftPort = readPort("MINECRAFT_PORT", 25565);
@@ -128,7 +148,9 @@ export function loadConfig(): AppConfig {
   const allowBuilding = readBoolean("ALLOW_BUILDING", false);
   const allowInventory = readBoolean("ALLOW_INVENTORY", false);
   const allowEating = readBoolean("ALLOW_EATING", false);
+  const allowEquip = readBoolean("ALLOW_EQUIP", false);
   const allowFlee = readBoolean("ALLOW_FLEE", true);
+  const mineOwnerOnly = readBoolean("MINE_OWNER_ONLY", true);
 
   const maxComeDistance = readNumber("MAX_COME_DISTANCE", 40, 1);
   const maxFollowStartDistance = readNumber("MAX_FOLLOW_START_DISTANCE", 40, 1);
@@ -154,6 +176,34 @@ export function loadConfig(): AppConfig {
   const fleeHomeRadius = readNumber("FLEE_HOME_RADIUS", 6, 1);
   const fleeToHome = readBoolean("FLEE_TO_HOME", true);
   const fleeToOwner = readBoolean("FLEE_TO_OWNER", true);
+  const miningMaxDistance = readNumber("MINING_MAX_DISTANCE", 5, 1);
+  const miningTimeoutMs = readInteger("MINING_TIMEOUT_MS", 10000, 1000);
+  const miningAllowedBlocks = readCsvList("MINING_ALLOWED_BLOCKS", [
+    "dirt",
+    "grass_block",
+    "snow",
+    "stone",
+    "coal_ore",
+    "copper_ore",
+    "iron_ore"
+  ]);
+  const miningForbiddenBlocks = readCsvList("MINING_FORBIDDEN_BLOCKS", [
+    "bedrock",
+    "water",
+    "lava",
+    "fire",
+    "chest",
+    "barrel",
+    "furnace",
+    "crafting_table",
+    "door",
+    "trapdoor"
+  ]);
+  const requireToolForStone = readBoolean("REQUIRE_TOOL_FOR_STONE", true);
+  const requireToolForOres = readBoolean("REQUIRE_TOOL_FOR_ORES", true);
+  const lowHealthStopThreshold = readNumber("LOW_HEALTH_STOP_THRESHOLD", 8, 1);
+  const lowFoodEatThreshold = readNumber("LOW_FOOD_EAT_THRESHOLD", 14, 1);
+  const homeProtectionRadius = readNumber("HOME_PROTECTION_RADIUS", 6, 0);
 
   const chatMinIntervalMs = readInteger("CHAT_MIN_INTERVAL_MS", 1200, 0);
   const spawnAnnounceDelayMs = readInteger("SPAWN_ANNOUNCE_DELAY_MS", 3000, 0);
@@ -192,7 +242,9 @@ export function loadConfig(): AppConfig {
     allowBuilding,
     allowInventory,
     allowEating,
+    allowEquip,
     allowFlee,
+    mineOwnerOnly,
     profilesFolder: path.resolve(process.cwd(), "data"),
     maxComeDistance,
     maxFollowStartDistance,
@@ -216,6 +268,15 @@ export function loadConfig(): AppConfig {
     fleeHomeRadius,
     fleeToHome,
     fleeToOwner,
+    miningMaxDistance,
+    miningTimeoutMs,
+    miningAllowedBlocks,
+    miningForbiddenBlocks,
+    requireToolForStone,
+    requireToolForOres,
+    lowHealthStopThreshold,
+    lowFoodEatThreshold,
+    homeProtectionRadius,
     chatMinIntervalMs,
     spawnAnnounceDelayMs,
     positionWaitTimeoutMs,

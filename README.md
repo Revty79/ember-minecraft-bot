@@ -2,22 +2,19 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.7: survival foundation + inventory awareness scaffolding**.
+This release is **v0.8: controlled eating, equipment awareness, and safe mining foundation**.
 
-- AI bridge remains optional/stubbed and is disabled by default.
-- Mining/combat/building/container usage remain locked by default.
-- Adds inventory read summaries, food/hunger awareness, flee scaffolding, stay-home mode, and block/ore perception commands.
+- AI bridge remains optional/stubbed and disabled by default.
+- No autonomous AI behavior is enabled.
+- Mining/combat/building/containers remain locked by default.
 
-## v0.7 Highlights
+## v0.8 Highlights
 
-- New read-only inventory summary command.
-- Food detection helper with known-food names plus registry-based food metadata fallback.
-- `EAT_FOOD` action scaffold is safety-gated by `ALLOW_EATING`.
-- Hunger/vitals now include hunger status (`full/okay/hungry/starving`).
-- Danger summary now includes proximity levels: `none/far/medium/close/critical`.
-- Optional flee behavior and manual `Ember flee` command.
-- Home/stay-home polish with persisted home at `HOME_FILE_PATH`.
-- New block/ore perception command surfaces for future mining planning (scan-only, no mining).
+- Controlled eating flow with `Ember eat` / `Ember eat force`.
+- Equipment awareness and equip commands (`food/pickaxe/shovel/axe`) behind safety gating.
+- Safe mining foundation with strict owner-only and block safety checks.
+- Ore report now explains why ore is or is not mineable.
+- Home protection radius prevents mining inside home area.
 
 ## Environment
 
@@ -44,7 +41,9 @@ ALLOW_COMBAT=false
 ALLOW_BUILDING=false
 ALLOW_INVENTORY=false
 ALLOW_EATING=false
+ALLOW_EQUIP=false
 ALLOW_FLEE=true
+MINE_OWNER_ONLY=true
 
 MAX_COME_DISTANCE=40
 MAX_FOLLOW_START_DISTANCE=40
@@ -61,6 +60,16 @@ FLEE_DISTANCE=12
 FLEE_HOME_RADIUS=6
 FLEE_TO_HOME=true
 FLEE_TO_OWNER=true
+
+MINING_MAX_DISTANCE=5
+MINING_TIMEOUT_MS=10000
+MINING_ALLOWED_BLOCKS=dirt,grass_block,snow,stone,coal_ore,copper_ore,iron_ore
+MINING_FORBIDDEN_BLOCKS=bedrock,water,lava,fire,chest,barrel,furnace,crafting_table,door,trapdoor
+REQUIRE_TOOL_FOR_STONE=true
+REQUIRE_TOOL_FOR_ORES=true
+LOW_HEALTH_STOP_THRESHOLD=8
+LOW_FOOD_EAT_THRESHOLD=14
+HOME_PROTECTION_RADIUS=6
 
 MIN_GOAL_REFRESH_DISTANCE=2
 FOLLOW_REPATH_INTERVAL_MS=1500
@@ -92,9 +101,19 @@ Public-safe:
 Owner-only:
 
 - `Ember inventory`
+- `Ember equipment`
 - `Ember food`
 - `Ember eat`
-- `Ember flee`
+- `Ember eat force`
+- `Ember equip food`
+- `Ember equip pickaxe`
+- `Ember equip shovel`
+- `Ember equip axe`
+- `Ember mine front`
+- `Ember mine block`
+- `Ember mine ore`
+- `Ember mine stop`
+- `Ember ore report`
 - `Ember block`
 - `Ember ores nearby`
 - `Ember obstacle`
@@ -102,6 +121,7 @@ Owner-only:
 - `Ember come`
 - `Ember follow me`
 - `Ember stop`
+- `Ember flee`
 - `Ember set home`
 - `Ember home`
 - `Ember stay home`
@@ -124,49 +144,28 @@ Defaults remain locked:
 - `ALLOW_BUILDING=false`
 - `ALLOW_INVENTORY=false`
 - `ALLOW_EATING=false`
+- `ALLOW_EQUIP=false`
 
 Notes:
 
-- Inventory read commands are safe and do not open chests/containers.
-- `EAT_FOOD` is blocked unless `ALLOW_EATING=true`.
-- Non-owner users cannot control movement/flee/recover/eat.
-- No arbitrary code execution or chat eval is implemented.
+- Inventory read commands do not open chests/containers.
+- `EAT_FOOD` and `EQUIP_ITEM` are blocked unless explicitly enabled.
+- Mining is owner-commanded only and safety-validated for distance, block allow/deny lists, danger, health, hunger, position validity, and home protection.
+- No autonomous mining loops are enabled.
 
-## Home Persistence
+## Mining Guardrails (v0.8)
 
-Home is persisted to `HOME_FILE_PATH` (default `./data/home.json`) with:
-
-- `x`
-- `y`
-- `z`
-- `dimension`
-- `world`
-- `timestamp`
-- `setBy`
-
-## Recover Behavior
-
-`Ember recover`:
-
-- stops movement
-- clears queued actions
-- if dead: requests respawn
-- if alive + invalid position: says `Recovering my position.` once, then quits for Docker restart
-- if alive + valid position: reports ready/position/vitals
+- Mines only explicit owner commands.
+- `mine front`/`mine block` target direct front block.
+- `mine ore` targets nearest visible ore only when safe/simple.
+- Stops mining on timeout, invalid position, danger, or low health.
+- Rejects mining inside `HOME_PROTECTION_RADIUS` around home.
 
 ## AI Bridge Stub
 
-- If `ENABLE_AI_BRIDGE=false`, bridge calls are skipped and logged periodically.
+- If `ENABLE_AI_BRIDGE=false`, bridge calls are skipped/logged.
 - If `ENABLE_AI_BRIDGE=true`, observations are POSTed to `AI_BRIDGE_URL`.
-- AI-requested actions are still safety-validated before queueing.
-
-## Known Limitation
-
-Movement remains terrain-limited while mining/building are disabled. EMBER may stop with:
-
-- `I'm blocked and stopped moving.`
-
-when pathing cannot proceed safely.
+- AI-requested actions still pass safety validation.
 
 ## Docker
 

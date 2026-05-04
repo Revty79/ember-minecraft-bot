@@ -34,9 +34,9 @@ logger.log(
   "config",
   `safety allowMining=${String(config.allowMining)} allowCombat=${String(config.allowCombat)} allowBuilding=${String(
     config.allowBuilding
-  )} allowInventory=${String(config.allowInventory)} allowEating=${String(config.allowEating)} allowFlee=${String(
-    config.allowFlee
-  )}`
+  )} allowInventory=${String(config.allowInventory)} allowEating=${String(config.allowEating)} allowEquip=${String(
+    config.allowEquip
+  )} allowFlee=${String(config.allowFlee)}`
 );
 logger.log(
   "config",
@@ -53,6 +53,16 @@ logger.log(
   )} fleeDistance=${config.fleeDistance} fleeHomeRadius=${config.fleeHomeRadius} fleeToHome=${String(
     config.fleeToHome
   )} fleeToOwner=${String(config.fleeToOwner)}`
+);
+logger.log(
+  "config",
+  `mining ownerOnly=${String(config.mineOwnerOnly)} maxDistance=${config.miningMaxDistance} timeoutMs=${config.miningTimeoutMs} lowHpStop=${config.lowHealthStopThreshold} lowFoodEatThreshold=${config.lowFoodEatThreshold} homeProtectionRadius=${config.homeProtectionRadius}`
+);
+logger.log(
+  "config",
+  `mining allowList=${config.miningAllowedBlocks.join(",")} forbidList=${config.miningForbiddenBlocks.join(",")} requireToolStone=${String(
+    config.requireToolForStone
+  )} requireToolOres=${String(config.requireToolForOres)}`
 );
 logger.log(
   "config",
@@ -97,7 +107,7 @@ const actions = createActionController(
       lastError: state.state.lastAiBridgeError
     }
 );
-aiBridgeController = createAiBridgeController(config, state, perception, actions, logger);
+aiBridgeController = createAiBridgeController(config, bot, state, perception, actions, logger);
 
 const commands = createCommandRouter(config, state, chat, actions, safety, logger);
 const lifecycle = createLifecycleController(

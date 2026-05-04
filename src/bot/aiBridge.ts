@@ -1,9 +1,12 @@
-﻿import type { AppConfig } from "../config";
+import type { AppConfig } from "../config";
+import type { Bot } from "mineflayer";
+import { getBestPickaxe, getEquipmentSummary, getFoodItems } from "./inventory";
 import type {
   ActionController,
   AiActionRequest,
   AiBridgeController,
   AiObservation,
+  BlockSummary,
   BotAction,
   Logger,
   PerceptionController,
@@ -38,6 +41,9 @@ function asBotAction(value: unknown): BotAction | null {
     blockName?: unknown;
     entityName?: unknown;
     itemName?: unknown;
+    category?: unknown;
+    mode?: unknown;
+    force?: unknown;
   };
 
   if (typeof action.type !== "string") {
@@ -71,7 +77,8 @@ function asBotAction(value: unknown): BotAction | null {
     case "MINE_BLOCK": {
       return {
         type: "MINE_BLOCK",
-        blockName: asOptionalString(action.blockName)
+        blockName: asOptionalString(action.blockName),
+        mode: action.mode === "front" || action.mode === "ore" ? action.mode : undefined
       };
     }
 
@@ -91,6 +98,7 @@ function asBotAction(value: unknown): BotAction | null {
 
     case "OPEN_INVENTORY":
     case "STOP_MOVING":
+    case "STOP_MINING":
     case "RESPAWN":
     case "LOOK_AT_OWNER":
     case "SET_HOME":
@@ -116,10 +124,12 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_DANGER":
     case "REPORT_THREAT":
     case "REPORT_INVENTORY":
+    case "REPORT_EQUIPMENT":
     case "REPORT_FOOD":
     case "REPORT_MOVEMENT":
     case "REPORT_BLOCK":
     case "REPORT_ORES_NEARBY":
+    case "REPORT_ORE_REPORT":
     case "REPORT_HOME_STATUS":
     case "REPORT_SAFETY_TEST": {
       return {
@@ -130,14 +140,22 @@ function asBotAction(value: unknown): BotAction | null {
     case "EQUIP_ITEM": {
       return {
         type: "EQUIP_ITEM",
-        itemName: asOptionalString(action.itemName)
+        itemName: asOptionalString(action.itemName),
+        category:
+          action.category === "food" ||
+          action.category === "pickaxe" ||
+          action.category === "shovel" ||
+          action.category === "axe"
+            ? action.category
+            : undefined
       };
     }
 
     case "EAT_FOOD": {
       return {
         type: "EAT_FOOD",
-        itemName: asOptionalString(action.itemName)
+        itemName: asOptionalString(action.itemName),
+        force: action.force === true ? true : undefined
       };
     }
 
@@ -146,8 +164,26 @@ function asBotAction(value: unknown): BotAction | null {
   }
 }
 
+function mineableOreSummary(
+  config: AppConfig,
+  visibleOres: BlockSummary[],
+  state: StateStore,
+  hasPickaxe: boolean
+): BlockSummary[] {
+  if (!config.allowMining) return [];
+  if (!state.state.alive || !state.state.ready || !state.state.position) return [];
+  const proximity = state.state.dangerSummary.proximity;
+  if (proximity === "close" || proximity === "critical") return [];
+  if (config.requireToolForOres && !hasPickaxe) return [];
+
+  return visibleOres.filter(
+    (ore) => config.miningAllowedBlocks.includes(ore.name) && !config.miningForbiddenBlocks.includes(ore.name)
+  );
+}
+
 export function createAiBridgeController(
   config: AppConfig,
+  bot: Bot,
   state: StateStore,
   perception: PerceptionController,
   actions: ActionController,
@@ -156,10 +192,31 @@ export function createAiBridgeController(
   let lastDisabledLogAt = 0;
 
   function buildObservation(): AiObservation {
+    const visibleOres = perception.getNearbyOresSummary(6);
+    const bestPickaxe = getBestPickaxe(bot);
+    const hasPickaxe = Boolean(bestPickaxe);
+
     return {
       timestamp: new Date().toISOString(),
       bot: state.getBotSnapshot(),
       perception: perception.getPerceptionSnapshot(),
+      survival: {
+        equipment: getEquipmentSummary(bot),
+        food: getFoodItems(bot),
+        mining: {
+          enabled: config.allowMining,
+          allowedBlocks: [...config.miningAllowedBlocks],
+          forbiddenBlocks: [...config.miningForbiddenBlocks],
+          maxDistance: config.miningMaxDistance,
+          homeProtectionRadius: config.homeProtectionRadius
+        },
+        visibleOres,
+        mineableOres: mineableOreSummary(config, visibleOres, state, hasPickaxe),
+        homeProtection: {
+          enabled: config.homeProtectionRadius > 0,
+          homeSet: Boolean(state.state.homeRecord || state.state.homePosition)
+        }
+      },
       actionQueue: actions.getActionQueueSummary(),
       recentEvents: state.getRecentEvents(25)
     };

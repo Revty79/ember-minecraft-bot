@@ -1,6 +1,7 @@
-﻿import type { Bot } from "mineflayer";
+import type { Bot } from "mineflayer";
 import type { PartiallyComputedPath } from "mineflayer-pathfinder";
 import type { AppConfig } from "../config";
+import { hasFoodAvailable } from "./inventory";
 import { isEntityPositionHealthy } from "./position";
 import type {
   ActionController,
@@ -55,6 +56,7 @@ export function createLifecycleController(
   let invalidRecoveryInProgress = false;
   let invalidLivePositionSince: number | null = null;
   let lastInvalidPositionLogAt = 0;
+  let lastLowFoodDisabledLogAt = 0;
   let lastPathUpdateLogAt = 0;
   let lastPathUpdateStatus = "";
 
@@ -275,6 +277,17 @@ export function createLifecycleController(
       });
       state.setAlive(isBotAlive(bot));
 
+      if (!config.allowEating && food !== null && food < config.lowFoodEatThreshold && hasFoodAvailable(bot)) {
+        const now = Date.now();
+        if (now - lastLowFoodDisabledLogAt >= 30_000) {
+          lastLowFoodDisabledLogAt = now;
+          logger.warn("survival", "food low but eating disabled", {
+            food,
+            threshold: config.lowFoodEatThreshold
+          });
+        }
+      }
+
       const healthyPosition = isEntityPositionHealthy(bot);
       if (healthyPosition) {
         state.setPosition({
@@ -371,4 +384,5 @@ export function createLifecycleController(
     bind
   };
 }
+
 

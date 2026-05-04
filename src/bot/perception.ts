@@ -7,6 +7,7 @@ import type {
   DangerSummary,
   EntitySummary,
   ImmediateObstacleReport,
+  NearbyBlockTarget,
   ObstacleBlockInfo,
   PerceptionController,
   PerceptionSnapshot,
@@ -80,6 +81,28 @@ const ORE_NAMES = new Set<string>([
   "ancient_debris"
 ]);
 
+const CONTAINER_BLOCKS = new Set<string>([
+  "chest",
+  "trapped_chest",
+  "barrel",
+  "shulker_box",
+  "hopper",
+  "dispenser",
+  "dropper"
+]);
+
+const UTILITY_BLOCKS = new Set<string>([
+  "crafting_table",
+  "furnace",
+  "blast_furnace",
+  "smoker",
+  "anvil",
+  "enchanting_table"
+]);
+
+const DANGEROUS_BLOCKS = new Set<string>(["fire", "soul_fire", "lava", "cactus", "magma_block", "campfire"]);
+const FORBIDDEN_BLOCKS = new Set<string>(["bedrock", "command_block", "end_portal_frame", "respawn_anchor"]);
+
 function toVec3Snapshot(position: { x: number; y: number; z: number } | null | undefined): Vec3Snapshot | null {
   if (!position) return null;
   if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) return null;
@@ -123,8 +146,14 @@ function classifyBlockName(name: string | null): BlockClass {
   if (!name) return "unknown";
   if (name === "air" || name === "cave_air" || name === "void_air") return "air";
   if (name.includes("water") || name.includes("lava")) return "fluid";
+  if (FORBIDDEN_BLOCKS.has(name)) return "forbidden";
+  if (DANGEROUS_BLOCKS.has(name)) return "dangerous";
+  if (CONTAINER_BLOCKS.has(name)) return "container";
+  if (name.includes("door") || name.includes("trapdoor") || name.endsWith("_bed")) return "utility";
+  if (UTILITY_BLOCKS.has(name)) return "utility";
   if (PASSABLE_BLOCKS.has(name)) return "passable";
   if (ORE_NAMES.has(name)) return "ore";
+  if (name.endsWith("_leaves") || name === "azalea_leaves" || name === "flowering_azalea_leaves") return "leaves";
   if (name.endsWith("_log") || name.endsWith("_wood")) return "log";
   if (name.includes("dirt") || name.includes("grass_block") || name.includes("podzol")) return "dirt";
   if (name.includes("stone") || name.includes("deepslate")) return "stone";
@@ -344,6 +373,40 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }
 
+  function getNearestOre(radius: number): NearbyBlockTarget | null {
+    if (!bot.entity) return null;
+    const botPosition = toVec3Snapshot(bot.entity.position);
+    if (!botPosition) return null;
+
+    const sampledRadius = Math.min(Math.max(Math.floor(radius), 1), 10);
+    const center = bot.entity.position.floored();
+    let nearest: NearbyBlockTarget | null = null;
+
+    for (let dx = -sampledRadius; dx <= sampledRadius; dx += 1) {
+      for (let dy = -sampledRadius; dy <= sampledRadius; dy += 1) {
+        for (let dz = -sampledRadius; dz <= sampledRadius; dz += 1) {
+          const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+          const block = bot.blockAt(pos);
+          if (!block || !ORE_NAMES.has(block.name)) continue;
+
+          const snapshot = toVec3Snapshot(pos);
+          if (!snapshot) continue;
+
+          const distance = computeDistance(botPosition, snapshot);
+          if (!nearest || distance < nearest.distance) {
+            nearest = {
+              name: block.name,
+              position: snapshot,
+              distance
+            };
+          }
+        }
+      }
+    }
+
+    return nearest;
+  }
+
   function getImmediateObstacles(): ImmediateObstacleReport {
     const position = bot.entity?.position;
     const pos = toVec3Snapshot(position);
@@ -479,6 +542,7 @@ export function createPerceptionController(bot: Bot, state: StateStore, logger: 
     getNearbyBlocksSummary,
     getNearbyBlocksByName,
     getNearbyOresSummary,
+    getNearestOre,
     classifyBlock: classifyBlockName,
     getBlockInFront,
     getImmediateObstacles,
