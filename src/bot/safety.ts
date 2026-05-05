@@ -55,6 +55,10 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
     "REPORT_SHADOW_LAST",
     "REPORT_SHADOW_TEST",
     "REPORT_SHADOW_SUMMARY",
+    "REPORT_SUPERVISED_STATUS",
+    "REPORT_SUPERVISED_LAST",
+    "REPORT_SUPERVISED_TEST",
+    "REPORT_SUPERVISED_SUMMARY",
     "REPORT_ACTION_QUEUE",
     "REPORT_HOME_STATUS",
     "REPORT_SAFETY_TEST",
@@ -81,7 +85,7 @@ export function createSafetyLayer(config: AppConfig, state: StateStore, logger: 
 
   function isPrivilegedRequester(requestor: string): boolean {
     if (isOwner(requestor)) return true;
-    return requestor === "SYSTEM" || requestor === "AI";
+    return requestor === "SYSTEM" || requestor === "AI" || requestor === "SUPERVISED_AI";
   }
 
   function normalizeChatMessage(message: string): string {

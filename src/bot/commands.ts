@@ -374,6 +374,26 @@ export function createCommandRouter(
       return;
     }
 
+    if (normalized === "ember supervised status") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SUPERVISED_STATUS" }, "supervised-status");
+      return;
+    }
+
+    if (normalized === "ember supervised last") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SUPERVISED_LAST" }, "supervised-last");
+      return;
+    }
+
+    if (normalized === "ember supervised test") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SUPERVISED_TEST" }, "supervised-test");
+      return;
+    }
+
+    if (normalized === "ember supervised summary") {
+      queueOwnerOnlyCommand(username, { type: "REPORT_SUPERVISED_SUMMARY" }, "supervised-summary");
+      return;
+    }
+
     if (normalized === "ember action queue") {
       queueOwnerOnlyCommand(username, { type: "REPORT_ACTION_QUEUE" }, "action-queue");
       return;

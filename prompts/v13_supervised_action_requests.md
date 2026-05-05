@@ -1,25 +1,713 @@
-# v13 Supervised Action Requests
+# v13 Supervised Action Requests — Minecraft Bot Body
+
+You are working ONLY in this repo:
+
+https://github.com/Revty79/ember-minecraft-bot
+
+Do not edit the EMBER brain repo in this task.
 
 ## Goal
-Allow AI to request actions, but never execute unless explicitly allowed and safety-approved.
 
-## Required Env Flag
-- `ALLOW_AI_SUPERVISED=false`
+Add v13 supervised action request support.
 
-## Allowed AI Request Scope (initial)
-- report status
-- look around
-- eat if hungry
-- go home
-- stop
-- flee
-- wander yard
+In v12, shadow mode worked:
+- Minecraft body sends observation to EMBER brain.
+- EMBER brain returns reply/wouldDo/confidence/logId.
+- Shadow responses are observation-only.
+- No actions are executed from shadow.
+- AI bridge remains disabled.
 
-## Forbidden Scope
-- No mining/building/combat/containers from AI in this version.
+In v13, allow EMBER brain to request a very small set of safe actions through a supervised endpoint, but the Minecraft body must remain the final safety gate.
 
-## Requirements
-- Every AI request must be logged.
-- Every request must pass existing safety validation.
-- Requests remain no-op when supervised mode is disabled.
+This is NOT full autonomy.
+This is NOT raw control.
+This is NOT keyboard/mouse control.
+This is NOT unlimited action execution.
+This is NOT combat/building/mining/container control.
 
+The bot may only execute a requested action if:
+1. supervised mode is enabled by env,
+2. the supervised bridge is configured,
+3. the EMBER response is valid,
+4. the requested action type is in the allowed supervised action list,
+5. confidence meets threshold,
+6. existing bot safety allows it,
+7. current state allows it,
+8. rate limits allow it,
+9. the body action executor accepts it.
+
+The Minecraft body remains the final authority.
+
+---
+
+## Current Architecture
+
+EMBER repo:
+- brain
+- local AI/Ollama
+- Minecraft bridge endpoints
+- shadow/supervised decision service
+- admin page
+- desired settings/logs
+
+ember-minecraft-bot repo:
+- Minecraft body
+- Mineflayer login
+- movement/action executor
+- task system
+- safety gate
+- state snapshots
+- shadow bridge client
+
+This task is only for the bot/body repo.
+
+---
+
+## Existing v12 Behavior Must Remain
+
+Do not break:
+- ENABLE_AI_SHADOW
+- SHADOW_BRIDGE_URL
+- SHADOW_BRIDGE_TOKEN
+- SHADOW_OBSERVATION_INTERVAL_MS
+- SHADOW_TIMEOUT_MS
+- Ember shadow status
+- Ember shadow test
+- Ember shadow last
+- Ember shadow summary
+- Ember capabilities
+- Ember safety test
+- v11 task system
+- owner commands
+- existing action queue
+- existing safety gates
+
+Shadow mode must remain observation-only:
+- shadow actions are ignored
+- shadow never queues actions
+- shadow never executes actions
+
+---
+
+## New Env Vars
+
+Add safe defaults to config and `.env.example`.
+
+Use these names:
+
+ENABLE_AI_SUPERVISED=false
+SUPERVISED_BRIDGE_URL=http://10.0.0.218:3004/api/minecraft/supervised
+SUPERVISED_BRIDGE_TOKEN=
+SUPERVISED_OBSERVATION_INTERVAL_MS=180000
+SUPERVISED_TIMEOUT_MS=180000
+SUPERVISED_SEND_WHILE_MOVING=false
+SUPERVISED_LOG_RESPONSE=true
+SUPERVISED_CHAT_SUMMARY=false
+SUPERVISED_MAX_ACTIONS=1
+SUPERVISED_MIN_CONFIDENCE=medium
+SUPERVISED_ALLOWED_ACTIONS=status,look,eat_if_hungry,go_home,stop,flee,wander_yard
+SUPERVISED_OWNER_REQUIRED=true
+SUPERVISED_REQUIRE_SAFE_STATE=true
+SUPERVISED_REPORT_RESULTS=true
+
+Also support this alias if easy, because earlier planning used it:
+ALLOW_AI_SUPERVISED=false
+
+If both exist, ENABLE_AI_SUPERVISED should be canonical.
+
+Rules:
+- default is disabled
+- missing token/url means no calls
+- never print token
+- do not spam chat
+- do not crash if EMBER is offline
+- do not overlap supervised calls
+- no supervised request should bypass existing safety
+
+---
+
+## Allowed Supervised Action Scope v13
+
+Only these action types may be accepted from EMBER:
+
+1. STATUS
+   - report current state
+   - no movement
+
+2. LOOK
+   - look around / perception report
+   - no movement unless existing look action is harmless
+   - can be implemented as status/perception summary if no look action exists
+
+3. EAT_IF_HUNGRY
+   - may eat only if existing eating safety allows
+   - no eating if full/not needed
+
+4. GO_HOME
+   - uses existing go-home/home safety
+
+5. STOP
+   - stop current movement/task/action
+
+6. FLEE
+   - uses existing flee safety
+   - only if danger/safety logic supports it
+
+7. WANDER_YARD
+   - uses existing safe yard wander behavior
+   - must respect home/yard protection
+   - must respect danger/health/food rules
+
+Map accepted aliases defensively:
+- status, report_status -> STATUS
+- look, look_around -> LOOK
+- eat, eat_if_hungry -> EAT_IF_HUNGRY
+- home, go_home -> GO_HOME
+- stop -> STOP
+- flee -> FLEE
+- wander, wander_yard -> WANDER_YARD
+
+---
+
+## Forbidden AI Scope v13
+
+Never accept or execute these from AI in v13:
+
+- mining
+- building
+- combat
+- attacking
+- crafting
+- containers/chests/barrels/furnaces
+- inventory management except eating/equip already allowed by existing safety
+- item dropping
+- item pickup as a requested AI action
+- placing blocks
+- breaking blocks
+- crop harvesting
+- long-distance travel
+- following unknown players
+- teleport/admin commands
+- raw movement control
+- raw keyboard/mouse control
+- arbitrary chat from AI
+- commands generated by AI
+- code execution
+- server commands
+
+If EMBER requests any forbidden action:
+- reject it
+- log it
+- do not queue it
+- send result back if result reporting is enabled
+- keep bot running
+
+---
+
+## Expected EMBER Supervised Response Shape
+
+The EMBER brain endpoint may return:
+
+{
+  "mode": "supervised",
+  "enabled": true,
+  "executed": false,
+  "reply": "...",
+  "wouldDo": "...",
+  "confidence": "low" | "medium" | "high",
+  "actions": [
+    {
+      "type": "GO_HOME",
+      "reason": "Stay safe near home."
+    }
+  ],
+  "logId": "optional"
+}
+
+Important:
+- EMBER must not claim it executed anything.
+- The bot/body decides whether to execute.
+- If executed=true comes from EMBER, log a warning and ignore that field.
+- If actions is empty, no action is queued.
+- If actions contains more than SUPERVISED_MAX_ACTIONS, only evaluate up to the max and reject the rest.
+- Default max actions is 1.
+
+---
+
+## Supervised State Tracking
+
+Track supervised state separately from shadow state.
+
+Add fields like:
+
+supervisedEnabled
+supervisedConfigured
+supervisedBridgeUrl
+supervisedLastSentAt
+supervisedLastResponseAt
+supervisedLastError
+supervisedLastReply
+supervisedLastWouldDo
+supervisedLastConfidence
+supervisedLastLogId
+supervisedSendCount
+supervisedErrorCount
+supervisedAcceptedCount
+supervisedRejectedCount
+supervisedExecutedCount
+supervisedLastRequestedActions
+supervisedLastAcceptedActions
+supervisedLastRejectedActions
+supervisedInFlight
+
+Add these to state snapshots if appropriate.
+
+Do not mix shadow state and supervised state.
+
+---
+
+## Supervised Bridge Client
+
+Create a dedicated client/controller, for example:
+
+src/bot/supervisedBridge.ts
+
+Responsibilities:
+- build observation payload using existing state/perception/action summaries
+- send POST to SUPERVISED_BRIDGE_URL
+- Authorization: Bearer <SUPERVISED_BRIDGE_TOKEN>
+- timeout via SUPERVISED_TIMEOUT_MS
+- no overlapping calls
+- defensive JSON parsing
+- validate mode/enabled/confidence/actions
+- update supervised state
+- log response
+- pass valid action requests into a supervised validation layer
+- never execute directly inside HTTP parsing logic
+- report results back to EMBER if enabled
+
+Do not reuse shadow response execution paths.
+Shadow remains no-action.
+Supervised has its own validation pipeline.
+
+---
+
+## Observation Payload
+
+Use the same clean observation style from v12 shadow mode.
+
+Include:
+- timestamp
+- source: "ember-minecraft-bot"
+- mode: "supervised"
+- bot version/build if available
+- bot username
+- owner username
+- bot snapshot
+- current task state
+- movement state
+- vitals
+- food/hunger
+- equipment
+- inventory food summary
+- danger summary
+- nearby players
+- nearby entities/hostiles if available
+- perception snapshot
+- target block summary
+- yard/home state
+- current safety flags
+- capabilities
+- action queue summary
+- recent events
+- supervised allowed actions
+- supervised forbidden actions summary
+
+Do not include secrets.
+Do not include tokens.
+
+---
+
+## Supervised Validation Pipeline
+
+Before any AI-requested action reaches the existing action queue, validate it.
+
+Suggested layers:
+
+1. Bridge enabled check
+   - ENABLE_AI_SUPERVISED must be true
+   - token/url configured
+
+2. Response validation
+   - mode must be supervised
+   - actions must be array
+   - confidence must meet SUPERVISED_MIN_CONFIDENCE
+
+3. Action allowlist check
+   - type must be in SUPERVISED_ALLOWED_ACTIONS
+
+4. Forbidden scope check
+   - reject mining/building/combat/crafting/containers/etc.
+
+5. Bot safety check
+   - reuse existing safety.ts / action validation
+   - reuse task/action constraints
+   - respect health/food/danger/home protection
+
+6. Rate limit check
+   - respect existing MAX_ACTIONS_PER_MINUTE
+   - avoid repeated action spam
+
+7. Queue check
+   - do not queue if action queue busy unless action is STOP/FLEE and existing safety allows interrupt
+   - STOP may be allowed to interrupt
+   - FLEE may be allowed if danger exists or safety says flee is appropriate
+
+8. Execution
+   - only enqueue mapped internal bot action after all checks pass
+   - action must be labeled as source=supervised-ai or similar
+
+Every rejection must include a reason.
+
+---
+
+## Result Reporting
+
+If SUPERVISED_REPORT_RESULTS=true, send result back to EMBER.
+
+Use existing endpoint if available:
+
+POST /api/minecraft/result
+
+Protected with bearer token.
+
+Payload should include:
+- timestamp
+- source: "ember-minecraft-bot"
+- mode: "supervised"
+- logId from EMBER if present
+- requested action
+- normalized action
+- accepted true/false
+- executed true/false
+- success true/false
+- rejection reason if any
+- safety reason if any
+- bot result summary
+- action id if queued
+- final mode/queue summary
+
+Do not include secrets.
+
+If result reporting fails:
+- log error
+- do not crash
+- do not retry endlessly
+
+---
+
+## Commands
+
+Add owner-only/safe report commands:
+
+### Ember supervised status
+
+Shows:
+- enabled
+- configured
+- bridge host/path only, no token
+- last sent
+- last response
+- last error
+- send count
+- accepted count
+- rejected count
+- executed count
+- current inFlight
+
+Example:
+Supervised: enabled=true, configured=true, lastResponse=..., confidence=medium, accepted=1, rejected=0, executed=1.
+
+### Ember supervised last
+
+Shows:
+- last reply
+- last wouldDo
+- confidence
+- logId
+- requested actions
+- accepted actions
+- rejected actions/reasons
+
+If no response:
+No supervised response yet.
+
+### Ember supervised test
+
+Owner-only.
+Immediately sends one supervised observation if enabled/configured.
+
+Rules:
+- if disabled: “Supervised mode is disabled by safety settings.”
+- if missing token/url: “Supervised bridge is not configured.”
+- sends exactly one request
+- validates response
+- may execute only if all supervised gates allow it
+- never executes forbidden actions
+
+### Ember supervised summary
+
+Short one-line state summary.
+
+---
+
+## Capabilities Update
+
+Update:
+
+Ember capabilities
+
+Add:
+- supervised=true/false
+- aiBridge=true/false
+- shadow=true/false
+
+Important:
+- supervised=true means supervised requests are enabled.
+- aiBridge must remain false unless the existing separate AI bridge is enabled.
+- supervised is not full autonomy.
+
+---
+
+## Safety Test Update
+
+Update:
+
+Ember safety test
+
+Include:
+- shadow allowed/blocked
+- supervised allowed/blocked
+- ai bridge allowed/blocked
+- supervised allowed actions list
+- forbidden AI scopes still blocked
+
+Example:
+shadow allowed, supervised allowed, ai bridge blocked, combat blocked, building blocked, containers blocked.
+
+---
+
+## AI Bridge Separation
+
+Keep these separate:
+
+- ENABLE_AI_SHADOW = observation-only shadow bridge
+- ENABLE_AI_SUPERVISED = limited supervised action request bridge
+- ENABLE_AI_BRIDGE = future/full action bridge if it already exists
+
+Rules:
+- Shadow never executes actions.
+- Supervised may only request limited safe actions if explicitly enabled.
+- AI bridge remains disabled unless manually enabled later.
+- Do not route shadow responses into supervised execution.
+- Do not route supervised responses into unrestricted AI bridge.
+- Do not create a full autonomy switch.
+
+---
+
+## Optional Remote Settings Support
+
+If simple and safe, add support for reading desired settings from EMBER later:
+
+GET /api/minecraft/settings
+
+Env:
+ENABLE_REMOTE_SETTINGS=false
+REMOTE_SETTINGS_URL=http://10.0.0.218:3004/api/minecraft/settings
+REMOTE_SETTINGS_TOKEN=
+REMOTE_SETTINGS_INTERVAL_MS=60000
+
+Rules:
+- disabled by default
+- protected by bearer token
+- never required for v13 to work
+- if endpoint unavailable, bot continues with .env settings
+- apply only safe fields
+- never let remote settings enable forbidden dangerous capabilities unless local env also allows it
+- local .env safety must be the hard ceiling
+- do not let remote settings turn on combat/building/crafting/containers in v13
+
+If this is too much for v13, document it as a v13.1/v14 follow-up and do not implement.
+
+---
+
+## README Update
+
+Document:
+- v13 supervised mode purpose
+- difference between shadow, supervised, and AI bridge
+- env vars
+- allowed supervised actions
+- forbidden AI actions
+- commands
+- result reporting
+- safety guarantees
+- example supervised response
+- example rejection
+- known limitations
+
+Make it clear:
+- supervised is not autonomy
+- EMBER does not directly control Minecraft
+- the bot body remains final safety gate
+- combat/building/mining/containers remain blocked for AI
+
+---
+
+## .env.example Update
+
+Add all new env vars with safe defaults:
+
+ENABLE_AI_SUPERVISED=false
+ALLOW_AI_SUPERVISED=false
+SUPERVISED_BRIDGE_URL=http://10.0.0.218:3004/api/minecraft/supervised
+SUPERVISED_BRIDGE_TOKEN=
+SUPERVISED_OBSERVATION_INTERVAL_MS=180000
+SUPERVISED_TIMEOUT_MS=180000
+SUPERVISED_SEND_WHILE_MOVING=false
+SUPERVISED_LOG_RESPONSE=true
+SUPERVISED_CHAT_SUMMARY=false
+SUPERVISED_MAX_ACTIONS=1
+SUPERVISED_MIN_CONFIDENCE=medium
+SUPERVISED_ALLOWED_ACTIONS=status,look,eat_if_hungry,go_home,stop,flee,wander_yard
+SUPERVISED_OWNER_REQUIRED=true
+SUPERVISED_REQUIRE_SAFE_STATE=true
+SUPERVISED_REPORT_RESULTS=true
+
+Optional if implemented:
+ENABLE_REMOTE_SETTINGS=false
+REMOTE_SETTINGS_URL=http://10.0.0.218:3004/api/minecraft/settings
+REMOTE_SETTINGS_TOKEN=
+REMOTE_SETTINGS_INTERVAL_MS=60000
+
+Keep:
+ENABLE_AI_BRIDGE=false
+ENABLE_AI_SHADOW=false by default in example
+
+---
+
+## STATUS.md Update
+
+After implementation, update prompts/STATUS.md with:
+- v13 summary
+- files changed
+- commands to run
+- test checklist
+- known limitations
+- safety notes
+- carry-forward polish notes
+
+Keep these known notes:
+- Shadow replies should be short and practical.
+- Shadow/supervised generation can be slow on local Ollama, so long timeouts may be needed.
+- Bot body and EMBER brain identity should continue moving toward one unified EMBER identity.
+- No full autonomy yet.
+
+---
+
+## Test Checklist
+
+### With ENABLE_AI_SUPERVISED=false
+
+- Build passes.
+- Bot starts.
+- Ember capabilities shows supervised=false.
+- Ember safety test shows supervised blocked.
+- Ember supervised status says disabled.
+- Ember supervised test says supervised disabled.
+- No calls are made to SUPERVISED_BRIDGE_URL.
+- Shadow mode still works if enabled.
+- Owner commands still work.
+
+### With ENABLE_AI_SUPERVISED=true but missing token
+
+- Bot starts.
+- Supervised status reports configured=false.
+- Supervised test says bridge not configured.
+- Bot does not crash.
+- Token is not logged.
+
+### With ENABLE_AI_SUPERVISED=true and token/url configured
+
+- Ember supervised test sends one observation.
+- EMBER returns supervised response.
+- Bot logs request.
+- Bot validates confidence.
+- Bot validates allowed action type.
+- Bot rejects forbidden actions.
+- Bot queues only allowed safe actions.
+- Result is logged.
+- Result is reported to EMBER if enabled.
+- action queue does not exceed max.
+- mode stays safe.
+- AI bridge remains disabled unless separately enabled.
+
+### Allowed action tests
+
+Test with EMBER returning or mock returning:
+- STATUS -> accepted/no movement
+- LOOK -> accepted/no unsafe movement
+- EAT_IF_HUNGRY -> accepted only if hungry/food available
+- GO_HOME -> accepted if home set
+- STOP -> accepted
+- FLEE -> accepted only if safety permits
+- WANDER_YARD -> accepted only if yard/home rules permit
+
+### Forbidden action tests
+
+Mock or simulate AI requesting:
+- MINE
+- BUILD
+- ATTACK
+- CRAFT
+- OPEN_CONTAINER
+- BREAK_BLOCK
+- PLACE_BLOCK
+- HARVEST_CROP
+
+Expected:
+- rejected
+- logged
+- no queue entry
+- no action executed
+- result reported if enabled
+
+### Regression tests
+
+- Ember hello works.
+- Ember task report works.
+- Ember task home works.
+- Ember task wander works.
+- Ember task mine still works only by owner command, not AI.
+- Ember task harvest still works only by owner command, not AI.
+- Ember stop works.
+- Ember shadow test still works.
+- Ember shadow last still works.
+- AI bridge remains disabled.
+
+---
+
+## Strict Behavior
+
+- No full autonomy.
+- No raw control.
+- No mining/building/combat/crafting/containers from AI.
+- No direct EMBER brain execution.
+- No token logging.
+- No crash if EMBER app is offline.
+- No crash on invalid JSON.
+- No overlapping supervised calls.
+- No unsafe queue entries.
+- No dangerous capabilities enabled by default.
+- Body safety always wins.
+- Do not continue to v14 unless explicitly instructed.

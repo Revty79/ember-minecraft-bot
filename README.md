@@ -2,27 +2,29 @@
 
 Minecraft Java bot body for EMBER using Node.js, TypeScript, Mineflayer, and mineflayer-pathfinder.
 
-This release is **v0.12: shadow mode (observation only)**.
+This release is **v0.13: supervised action requests (limited and safety-gated)**.
 
 - AI bridge remains optional and disabled by default.
 - Shadow mode is optional and disabled by default.
+- Supervised mode is optional and disabled by default.
 - No autonomous behavior loops are enabled.
 - Combat/building/containers/crafting remain locked by default.
 - Harvesting exists as single-command scaffolding behind safety flags.
 - Wandering is owner-commanded, radius-bound, and time-limited behind safety flags.
 - Tasks are owner-commanded one-shot objectives only.
 
-## v0.12 Highlights
+## v0.13 Highlights
 
-- Added AI shadow mode as observation + suggestion + logging only.
-- Added periodic shadow observation loop with no-overlap protection.
+- Kept v0.12 shadow behavior (observation-only; no shadow action execution).
+- Added supervised bridge with a strict allowlist and confidence threshold.
 - Added owner commands:
-  - `Ember shadow status`
-  - `Ember shadow last`
-  - `Ember shadow test`
-  - `Ember shadow summary`
-- Added shadow visibility to `Ember capabilities` and `Ember safety test`.
-- Shadow responses never execute actions and never write to action queue.
+  - `Ember supervised status`
+  - `Ember supervised last`
+  - `Ember supervised test`
+  - `Ember supervised summary`
+- Added supervised visibility to `Ember capabilities` and `Ember safety test`.
+- Added optional result reporting for supervised evaluations.
+- Body safety remains final authority; no full autonomy.
 
 ## Environment
 
@@ -48,6 +50,21 @@ SHADOW_SEND_RECENT_EVENTS=25
 SHADOW_TIMEOUT_MS=15000
 SHADOW_LOG_RESPONSE=true
 SHADOW_CHAT_SUMMARY=false
+ENABLE_AI_SUPERVISED=false
+ALLOW_AI_SUPERVISED=false
+SUPERVISED_BRIDGE_URL=http://10.0.0.218:3004/api/minecraft/supervised
+SUPERVISED_BRIDGE_TOKEN=
+SUPERVISED_OBSERVATION_INTERVAL_MS=180000
+SUPERVISED_TIMEOUT_MS=180000
+SUPERVISED_SEND_WHILE_MOVING=false
+SUPERVISED_LOG_RESPONSE=true
+SUPERVISED_CHAT_SUMMARY=false
+SUPERVISED_MAX_ACTIONS=1
+SUPERVISED_MIN_CONFIDENCE=medium
+SUPERVISED_ALLOWED_ACTIONS=status,look,eat_if_hungry,go_home,stop,flee,wander_yard
+SUPERVISED_OWNER_REQUIRED=true
+SUPERVISED_REQUIRE_SAFE_STATE=true
+SUPERVISED_REPORT_RESULTS=true
 OBSERVATION_INTERVAL_MS=5000
 STATE_LOG_INTERVAL_MS=10000
 STATE_LOG_ONLY_ON_CHANGE=true
@@ -205,6 +222,10 @@ Owner-only:
 - `Ember shadow last`
 - `Ember shadow test`
 - `Ember shadow summary`
+- `Ember supervised status`
+- `Ember supervised last`
+- `Ember supervised test`
+- `Ember supervised summary`
 - `Ember action queue`
 - `Ember task go home`
 - `Ember task follow owner`
@@ -225,6 +246,8 @@ Owner-only:
 - flee
 - tasks
 - shadow
+- supervised
+- aiBridge
 - inventoryRead
 - equipment
 - eating
@@ -260,6 +283,8 @@ Important notes:
 - Task system is one-shot only and does not add autonomous loops.
 - Shadow mode is observation-only and does not execute body actions.
 - Shadow response `actions` are ignored in v0.12.
+- Supervised mode is allowlist-limited and safety-gated.
+- Supervised AI cannot run mining/building/combat/crafting/container actions.
 
 ## Harvesting (v0.9)
 
@@ -304,11 +329,18 @@ Behavior guarantees in v0.12:
 - `executed=true` is logged as warning and still not executed.
 - If the endpoint is offline or invalid, bot continues running.
 
-## AI Bridge vs Shadow
+## Shadow vs Supervised vs AI Bridge
 
-- `ENABLE_AI_BRIDGE` is the separate action bridge path (disabled by default).
-- `ENABLE_AI_SHADOW` is observation-only shadow mode.
-- Keep `ENABLE_AI_BRIDGE=false` when using shadow-only operation.
+- `ENABLE_AI_SHADOW`: observation-only shadow bridge. Shadow never executes actions.
+- `ENABLE_AI_SUPERVISED`: limited supervised bridge with strict allowlist + confidence + safety checks.
+- `ENABLE_AI_BRIDGE`: separate unrestricted bridge path (still disabled by default).
+
+Supervised mode is not autonomy:
+
+- EMBER brain does not directly control Minecraft.
+- Bot body remains final safety gate.
+- No raw keyboard/mouse or unrestricted movement control.
+- No mining/building/combat/crafting/containers from supervised AI in v0.13.
 
 ## Shadow Commands
 
@@ -316,6 +348,68 @@ Behavior guarantees in v0.12:
 - `Ember shadow last`: last reply/wouldDo/confidence/logId.
 - `Ember shadow test`: owner-triggered single shadow send (no action execution).
 - `Ember shadow summary`: one-line shadow health summary.
+
+## Supervised Mode (v0.13)
+
+Supervised mode lets EMBER request a small safe action set. Requests are validated by the bot body before queueing.
+
+Allowed supervised actions:
+
+- `STATUS`
+- `LOOK`
+- `EAT_IF_HUNGRY`
+- `GO_HOME`
+- `STOP`
+- `FLEE`
+- `WANDER_YARD`
+
+Forbidden AI action scope in v0.13:
+
+- mining
+- building
+- combat/attack
+- crafting
+- containers/chests/barrels/furnaces
+- block break/place
+- raw movement or keyboard/mouse control
+- arbitrary AI chat/command execution
+
+Example supervised response:
+
+```json
+{
+  "mode": "supervised",
+  "enabled": true,
+  "executed": false,
+  "reply": "I would return home for safety.",
+  "wouldDo": "GO_HOME",
+  "confidence": "medium",
+  "actions": [
+    {
+      "type": "GO_HOME",
+      "reason": "Stay safe near home."
+    }
+  ],
+  "logId": "optional-id"
+}
+```
+
+Example rejection:
+
+`Rejected: action is unsupported or forbidden in supervised mode.`
+
+Supervised result reporting:
+
+- Controlled by `SUPERVISED_REPORT_RESULTS`.
+- Posts per-action evaluation results to `/api/minecraft/result` using bearer token auth.
+- Result-report failures are logged but do not crash the bot.
+
+## Supervised Commands
+
+- `Ember supervised status`: enabled/configured state, bridge host+path, counters, thresholds.
+- `Ember supervised last`: last reply/wouldDo/confidence/logId plus requested/accepted/rejected actions.
+- `Ember supervised test`: owner-triggered single supervised request and evaluation pass.
+- `Ember supervised summary`: one-line supervised state summary.
 
 ## Yard Wandering (v0.10.2)
 
@@ -368,3 +462,5 @@ docker logs ember-minecraft-bot --tail 180
 - Terrain-limited pathing remains possible because autonomous terrain modification is disabled.
 - Crop maturity detection depends on block state availability.
 - Harvesting is intentionally single-action and command-driven only.
+- Supervised decisions can be slow with local LLM/Ollama setups; higher timeouts may be needed.
+- Remote settings sync (`/api/minecraft/settings`) is not implemented in v0.13 and is a follow-up item.

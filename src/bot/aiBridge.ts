@@ -135,6 +135,10 @@ function asBotAction(value: unknown): BotAction | null {
     case "REPORT_SHADOW_LAST":
     case "REPORT_SHADOW_TEST":
     case "REPORT_SHADOW_SUMMARY":
+    case "REPORT_SUPERVISED_STATUS":
+    case "REPORT_SUPERVISED_LAST":
+    case "REPORT_SUPERVISED_TEST":
+    case "REPORT_SUPERVISED_SUMMARY":
     case "REPORT_ACTION_QUEUE":
     case "REPORT_CAPABILITIES":
     case "REPORT_VITALS":

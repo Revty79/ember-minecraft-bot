@@ -37,6 +37,8 @@ function createCapabilities(config: AppConfig): CapabilitySummary {
     wandering: config.allowWander,
     tasks: config.enableTaskSystem,
     shadow: config.enableAiShadow,
+    supervised: config.enableAiSupervised,
+    aiBridge: config.enableAiBridge,
     inventoryRead: true,
     equipment: config.allowEquip,
     eating: config.allowEating,
@@ -136,6 +138,26 @@ function createInitialState(config: AppConfig): BotState {
     shadowLastLogId: null,
     shadowSendCount: 0,
     shadowErrorCount: 0,
+    supervisedEnabled: config.enableAiSupervised,
+    supervisedConfigured:
+      Boolean(config.supervisedBridgeUrl?.trim()) && Boolean(config.supervisedBridgeToken.trim()),
+    supervisedBridgeUrl: config.supervisedBridgeUrl ?? null,
+    supervisedLastSentAt: null,
+    supervisedLastResponseAt: null,
+    supervisedLastError: null,
+    supervisedLastReply: null,
+    supervisedLastWouldDo: null,
+    supervisedLastConfidence: null,
+    supervisedLastLogId: null,
+    supervisedSendCount: 0,
+    supervisedErrorCount: 0,
+    supervisedAcceptedCount: 0,
+    supervisedRejectedCount: 0,
+    supervisedExecutedCount: 0,
+    supervisedLastRequestedActions: [],
+    supervisedLastAcceptedActions: [],
+    supervisedLastRejectedActions: [],
+    supervisedInFlight: false,
     actionQueueLength: 0,
     runningAction: null,
     blockedReason: null
@@ -347,6 +369,66 @@ export function createStateStore(config: AppConfig): StateStore {
     if (shadow.shadowErrorCount !== undefined) state.shadowErrorCount = shadow.shadowErrorCount;
   }
 
+  function setSupervisedState(
+    supervised: Partial<{
+      supervisedEnabled: boolean;
+      supervisedConfigured: boolean;
+      supervisedBridgeUrl: string | null;
+      supervisedLastSentAt: string | null;
+      supervisedLastResponseAt: string | null;
+      supervisedLastError: string | null;
+      supervisedLastReply: string | null;
+      supervisedLastWouldDo: string | null;
+      supervisedLastConfidence: BotState["supervisedLastConfidence"];
+      supervisedLastLogId: string | null;
+      supervisedSendCount: number;
+      supervisedErrorCount: number;
+      supervisedAcceptedCount: number;
+      supervisedRejectedCount: number;
+      supervisedExecutedCount: number;
+      supervisedLastRequestedActions: string[];
+      supervisedLastAcceptedActions: string[];
+      supervisedLastRejectedActions: string[];
+      supervisedInFlight: boolean;
+    }>
+  ): void {
+    if (supervised.supervisedEnabled !== undefined) state.supervisedEnabled = supervised.supervisedEnabled;
+    if (supervised.supervisedConfigured !== undefined) state.supervisedConfigured = supervised.supervisedConfigured;
+    if (supervised.supervisedBridgeUrl !== undefined) state.supervisedBridgeUrl = supervised.supervisedBridgeUrl;
+    if (supervised.supervisedLastSentAt !== undefined) state.supervisedLastSentAt = supervised.supervisedLastSentAt;
+    if (supervised.supervisedLastResponseAt !== undefined) {
+      state.supervisedLastResponseAt = supervised.supervisedLastResponseAt;
+    }
+    if (supervised.supervisedLastError !== undefined) state.supervisedLastError = supervised.supervisedLastError;
+    if (supervised.supervisedLastReply !== undefined) state.supervisedLastReply = supervised.supervisedLastReply;
+    if (supervised.supervisedLastWouldDo !== undefined) state.supervisedLastWouldDo = supervised.supervisedLastWouldDo;
+    if (supervised.supervisedLastConfidence !== undefined) {
+      state.supervisedLastConfidence = supervised.supervisedLastConfidence;
+    }
+    if (supervised.supervisedLastLogId !== undefined) state.supervisedLastLogId = supervised.supervisedLastLogId;
+    if (supervised.supervisedSendCount !== undefined) state.supervisedSendCount = supervised.supervisedSendCount;
+    if (supervised.supervisedErrorCount !== undefined) state.supervisedErrorCount = supervised.supervisedErrorCount;
+    if (supervised.supervisedAcceptedCount !== undefined) {
+      state.supervisedAcceptedCount = supervised.supervisedAcceptedCount;
+    }
+    if (supervised.supervisedRejectedCount !== undefined) {
+      state.supervisedRejectedCount = supervised.supervisedRejectedCount;
+    }
+    if (supervised.supervisedExecutedCount !== undefined) {
+      state.supervisedExecutedCount = supervised.supervisedExecutedCount;
+    }
+    if (supervised.supervisedLastRequestedActions !== undefined) {
+      state.supervisedLastRequestedActions = [...supervised.supervisedLastRequestedActions];
+    }
+    if (supervised.supervisedLastAcceptedActions !== undefined) {
+      state.supervisedLastAcceptedActions = [...supervised.supervisedLastAcceptedActions];
+    }
+    if (supervised.supervisedLastRejectedActions !== undefined) {
+      state.supervisedLastRejectedActions = [...supervised.supervisedLastRejectedActions];
+    }
+    if (supervised.supervisedInFlight !== undefined) state.supervisedInFlight = supervised.supervisedInFlight;
+  }
+
   function setActionQueueInfo(queueLength: number, runningAction: string | null): void {
     state.actionQueueLength = queueLength;
     state.runningAction = runningAction;
@@ -411,6 +493,7 @@ export function createStateStore(config: AppConfig): StateStore {
     setLastCommandReceived,
     setAiBridgeError,
     setShadowState,
+    setSupervisedState,
     setActionQueueInfo,
     setBlockedReason,
     getBotSnapshot,

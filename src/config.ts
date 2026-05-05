@@ -19,6 +19,20 @@ export interface AppConfig {
   shadowTimeoutMs: number;
   shadowLogResponse: boolean;
   shadowChatSummary: boolean;
+  enableAiSupervised: boolean;
+  supervisedBridgeUrl?: string;
+  supervisedBridgeToken: string;
+  supervisedObservationIntervalMs: number;
+  supervisedTimeoutMs: number;
+  supervisedSendWhileMoving: boolean;
+  supervisedLogResponse: boolean;
+  supervisedChatSummary: boolean;
+  supervisedMaxActions: number;
+  supervisedMinConfidence: "low" | "medium" | "high";
+  supervisedAllowedActions: string[];
+  supervisedOwnerRequired: boolean;
+  supervisedRequireSafeState: boolean;
+  supervisedReportResults: boolean;
   observationIntervalMs: number;
   stateLogIntervalMs: number;
   maxChatLength: number;
@@ -174,6 +188,14 @@ function readCsvList(name: string, fallback: string[]): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function readBooleanWithAlias(canonicalName: string, aliasName: string, fallback: boolean): boolean {
+  const canonicalRaw = process.env[canonicalName]?.trim();
+  if (canonicalRaw && canonicalRaw.length > 0) {
+    return readBoolean(canonicalName, fallback);
+  }
+  return readBoolean(aliasName, fallback);
+}
+
 export function loadConfig(): AppConfig {
   const minecraftHost = readEnv("MINECRAFT_HOST", "10.0.0.218");
   const minecraftPort = readPort("MINECRAFT_PORT", 25565);
@@ -194,6 +216,39 @@ export function loadConfig(): AppConfig {
   const shadowTimeoutMs = readInteger("SHADOW_TIMEOUT_MS", 15000, 250);
   const shadowLogResponse = readBoolean("SHADOW_LOG_RESPONSE", true);
   const shadowChatSummary = readBoolean("SHADOW_CHAT_SUMMARY", false);
+  const enableAiSupervised = readBooleanWithAlias("ENABLE_AI_SUPERVISED", "ALLOW_AI_SUPERVISED", false);
+  const supervisedBridgeUrl =
+    process.env.SUPERVISED_BRIDGE_URL?.trim() || "http://10.0.0.218:3004/api/minecraft/supervised";
+  const supervisedBridgeToken = process.env.SUPERVISED_BRIDGE_TOKEN?.trim() ?? "";
+  const supervisedObservationIntervalMs = readInteger("SUPERVISED_OBSERVATION_INTERVAL_MS", 180000, 1000);
+  const supervisedTimeoutMs = readInteger("SUPERVISED_TIMEOUT_MS", 180000, 250);
+  const supervisedSendWhileMoving = readBoolean("SUPERVISED_SEND_WHILE_MOVING", false);
+  const supervisedLogResponse = readBoolean("SUPERVISED_LOG_RESPONSE", true);
+  const supervisedChatSummary = readBoolean("SUPERVISED_CHAT_SUMMARY", false);
+  const supervisedMaxActions = readInteger("SUPERVISED_MAX_ACTIONS", 1, 1);
+  const supervisedMinConfidenceRaw = readEnv("SUPERVISED_MIN_CONFIDENCE", "medium").toLowerCase();
+  if (
+    supervisedMinConfidenceRaw !== "low" &&
+    supervisedMinConfidenceRaw !== "medium" &&
+    supervisedMinConfidenceRaw !== "high"
+  ) {
+    throw new Error(
+      `Invalid SUPERVISED_MIN_CONFIDENCE "${supervisedMinConfidenceRaw}". Supported: low, medium, high`
+    );
+  }
+  const supervisedMinConfidence: "low" | "medium" | "high" = supervisedMinConfidenceRaw;
+  const supervisedAllowedActions = readCsvList("SUPERVISED_ALLOWED_ACTIONS", [
+    "status",
+    "look",
+    "eat_if_hungry",
+    "go_home",
+    "stop",
+    "flee",
+    "wander_yard"
+  ]);
+  const supervisedOwnerRequired = readBoolean("SUPERVISED_OWNER_REQUIRED", true);
+  const supervisedRequireSafeState = readBoolean("SUPERVISED_REQUIRE_SAFE_STATE", true);
+  const supervisedReportResults = readBoolean("SUPERVISED_REPORT_RESULTS", true);
   const observationIntervalMs = readInteger("OBSERVATION_INTERVAL_MS", 5000, 250);
   const stateLogIntervalMs = readInteger("STATE_LOG_INTERVAL_MS", 10000, 1000);
   const maxChatLength = readInteger("MAX_CHAT_LENGTH", 220, 8);
@@ -359,6 +414,20 @@ export function loadConfig(): AppConfig {
     shadowTimeoutMs,
     shadowLogResponse,
     shadowChatSummary,
+    enableAiSupervised,
+    supervisedBridgeUrl,
+    supervisedBridgeToken,
+    supervisedObservationIntervalMs,
+    supervisedTimeoutMs,
+    supervisedSendWhileMoving,
+    supervisedLogResponse,
+    supervisedChatSummary,
+    supervisedMaxActions,
+    supervisedMinConfidence,
+    supervisedAllowedActions,
+    supervisedOwnerRequired,
+    supervisedRequireSafeState,
+    supervisedReportResults,
     observationIntervalMs,
     stateLogIntervalMs,
     maxChatLength,

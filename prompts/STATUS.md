@@ -4,7 +4,7 @@
 - [x] v10.2_safe_yard_reliability.md
 - [x] v11_task_system.md
 - [x] v12_shadow_mode.md
-- [ ] v13_supervised_action_requests.md
+- [x] v13_supervised_action_requests.md
 - [ ] v14_inventory_and_containers_scaffold.md
 - [ ] v15_building_and_crafting_scaffold.md
 - [ ] v16_combat_defense_scaffold.md
@@ -197,3 +197,105 @@ Known limitations:
   - task eat completion chat wording still needs polish.
   - task harvest/home-protection messaging can be clearer.
   - continue monitoring restart/relog count if repeated reconnects occur.
+
+### 2026-05-04 - v13_supervised_action_requests.md
+
+Status: completed
+
+Summary:
+- Added a dedicated supervised bridge controller (`src/bot/supervisedBridge.ts`) that sends supervised observations, validates responses, applies strict action allowlist/confidence checks, runs safety dry-runs, and queues only approved safe actions.
+- Added supervised state tracking fields and counters (configured/inFlight/send/error/accepted/rejected/executed and last requested/accepted/rejected action sets), separate from shadow state.
+- Added owner supervised commands:
+  - `Ember supervised status`
+  - `Ember supervised last`
+  - `Ember supervised test`
+  - `Ember supervised summary`
+- Added supervised capability/safety reporting:
+  - `Ember capabilities` now reports `supervised` and `aiBridge`.
+  - `Ember safety test` now reports `shadow`, `supervised`, `aiBridge`, supervised allowlist, and forbidden AI scope blocking summary.
+- Added supervised interval loop and result reporting support (`/api/minecraft/result`) with non-crashing failure behavior.
+- Preserved v12 guarantees:
+  - shadow remains observation-only
+  - shadow actions remain ignored
+  - no shadow action queue execution path added
+
+Files changed:
+- `.env.example`
+- `README.md`
+- `src/config.ts`
+- `src/index.ts`
+- `src/bot/actions.ts`
+- `src/bot/aiBridge.ts`
+- `src/bot/commands.ts`
+- `src/bot/safety.ts`
+- `src/bot/state.ts`
+- `src/bot/types.ts`
+- `src/bot/supervisedBridge.ts`
+- `prompts/STATUS.md`
+
+Commands run:
+- `npm run build`
+
+Commands to run on server:
+- `cd /apps/ember-minecraft-bot`
+- `git pull`
+- `docker compose down`
+- `docker compose up -d --build`
+- `docker logs ember-minecraft-bot --tail 220`
+
+Tests to perform:
+- With `ENABLE_AI_SUPERVISED=false`:
+  - Build passes.
+  - Bot starts.
+  - `Ember capabilities` shows `supervised=false`.
+  - `Ember safety test` shows supervised blocked.
+  - `Ember supervised status` says disabled.
+  - `Ember supervised test` says supervised disabled.
+  - No calls are made to `SUPERVISED_BRIDGE_URL`.
+  - Shadow mode still works if enabled.
+  - Owner commands still work.
+- With `ENABLE_AI_SUPERVISED=true` but missing token:
+  - Bot starts.
+  - `Ember supervised status` reports `configured=false`.
+  - `Ember supervised test` says bridge not configured.
+  - Bot does not crash.
+  - Token is not logged.
+- With `ENABLE_AI_SUPERVISED=true` and token/url configured:
+  - `Ember supervised test` sends one observation.
+  - EMBER returns supervised response.
+  - Bot validates confidence and action type against allowlist.
+  - Bot rejects forbidden actions.
+  - Bot queues only allowed safe actions.
+  - Result is logged and reported when enabled.
+  - Action queue remains bounded and safe.
+  - AI bridge remains disabled unless separately enabled.
+- Allowed action verification:
+  - `STATUS`, `LOOK`, `EAT_IF_HUNGRY`, `GO_HOME`, `STOP`, `FLEE`, `WANDER_YARD` through supervised responses.
+- Forbidden action verification:
+  - MINE/BUILD/ATTACK/CRAFT/CONTAINER/BREAK/PLACE/HARVEST_CROP should be rejected, logged, and not queued.
+- Regression:
+  - `Ember hello` works.
+  - `Ember task report/home/wander/mine/harvest` owner flows still work.
+  - `Ember stop` works.
+  - `Ember shadow test` and `Ember shadow last` still work.
+  - AI bridge remains disabled by default.
+
+Known limitations:
+- Live Minecraft integration tests were not run in this local pass; TypeScript build validation only.
+- Queue acceptance/execution counters are based on supervised pipeline acceptance and queue requests; deep post-action outcome reconciliation is still limited.
+- Remote settings sync (`/api/minecraft/settings`) was not implemented in v13 and is deferred.
+
+Safety notes:
+- No full autonomy switch.
+- No raw control.
+- No mining/building/combat/crafting/containers from supervised AI.
+- Body safety and existing action safety gates remain final authority.
+- No token logging.
+- No crash on invalid JSON/offline EMBER endpoint.
+- No overlapping supervised calls.
+
+Carry-forward notes:
+- Shadow replies should remain short and practical.
+- Shadow/supervised generation can be slow on local Ollama; long timeouts may be needed.
+- Bot body and EMBER brain identity should keep converging toward one unified EMBER identity.
+- No full autonomy yet.

@@ -28,6 +28,8 @@ import type {
   SafetyLayer,
   ShadowBridgeStatus,
   ShadowSendOutcome,
+  SupervisedBridgeStatus,
+  SupervisedSendOutcome,
   StateStore,
   TaskName,
   TaskState
@@ -211,6 +213,11 @@ function formatBridgeUrlForChat(urlText: string | null): string {
   }
 }
 
+function summarizeActionNames(values: string[], maxItems = 5): string {
+  if (values.length === 0) return "none";
+  return values.slice(0, maxItems).join(", ");
+}
+
 function taskLabel(task: TaskName): string {
   switch (task) {
     case "go_home":
@@ -300,7 +307,9 @@ export function createActionController(
   logger: Logger,
   getAiStatus: () => AiBridgeStatus,
   getShadowStatus: () => ShadowBridgeStatus,
-  sendShadowObservation: () => Promise<ShadowSendOutcome>
+  sendShadowObservation: () => Promise<ShadowSendOutcome>,
+  getSupervisedStatus: () => SupervisedBridgeStatus,
+  sendSupervisedObservation: () => Promise<SupervisedSendOutcome>
 ): ActionController {
   const queue: ActionQueueItem[] = [];
   let actionId = 0;
@@ -1067,7 +1076,7 @@ export function createActionController(
       const reason = decision.reason ?? "Action blocked by safety.";
       logger.warn("safety", `Action rejected for ${requestedBy}: ${reason}`, action);
 
-      if (requestedBy !== "SYSTEM" && requestedBy !== "AI") {
+      if (requestedBy !== "SYSTEM" && requestedBy !== "AI" && requestedBy !== "SUPERVISED_AI") {
         chat.send(reason, "safety-rejected");
       }
       return;
@@ -1550,7 +1559,7 @@ export function createActionController(
 
       case "REPORT_HELP": {
         chat.send(
-          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: task go home/follow owner/eat if hungry/wander once/harvest once/mine once, task report, task stop, target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, shadow status, shadow last, shadow test, shadow summary, action queue.",
+          "Commands: hello, help, capabilities, status, vitals, hunger, danger, threat, where are you, nearby, look, movement. Owner: task go home/follow owner/eat if hungry/wander once/harvest once/mine once, task report, task stop, target, inventory, equipment, food, eat, equip food/pickaxe/shovel/axe, mine front/block/ore, mine stop, ore report, harvest report/front/grass/crop, harvest stop, wander, wander home, wander stop, yard status, yard check, block, ores nearby, come, follow me, stop, flee, respawn, distance, obstacle, set home, home, stay home, home status, clear home, recover, safety test, state, debug, ai status, shadow status, shadow last, shadow test, shadow summary, supervised status, supervised last, supervised test, supervised summary, action queue.",
           "help"
         );
         return true;
@@ -1698,6 +1707,103 @@ export function createActionController(
         return true;
       }
 
+      case "REPORT_SUPERVISED_STATUS": {
+        const supervisedStatus = getSupervisedStatus();
+        const bridge = formatBridgeUrlForChat(supervisedStatus.url);
+        const allowed = summarizeActionNames(supervisedStatus.allowedActions.map((entry) => entry.toLowerCase()), 7);
+        const confidence = supervisedStatus.lastConfidence ?? "none";
+        chat.send(
+          `Supervised: enabled=${String(supervisedStatus.enabled)}, configured=${String(
+            supervisedStatus.configured
+          )}, bridge=${bridge}, lastSent=${supervisedStatus.lastSentAt ?? "never"}, lastResponse=${
+            supervisedStatus.lastResponseAt ?? "never"
+          }, confidence=${confidence}, sends=${supervisedStatus.sendCount}, accepted=${
+            supervisedStatus.acceptedCount
+          }, rejected=${supervisedStatus.rejectedCount}, executed=${supervisedStatus.executedCount}, inFlight=${String(
+            supervisedStatus.inFlight
+          )}, minConfidence=${supervisedStatus.minConfidence}, maxActions=${supervisedStatus.maxActions}, allowed=${allowed}, lastError=${summarizeText(
+            supervisedStatus.lastError,
+            60
+          )}.`,
+          "supervised-status"
+        );
+        return true;
+      }
+
+      case "REPORT_SUPERVISED_LAST": {
+        const supervisedStatus = getSupervisedStatus();
+        const hasAny =
+          Boolean(supervisedStatus.lastReply) ||
+          Boolean(supervisedStatus.lastWouldDo) ||
+          Boolean(supervisedStatus.lastConfidence) ||
+          Boolean(supervisedStatus.lastLogId) ||
+          supervisedStatus.lastRequestedActions.length > 0;
+        if (!hasAny) {
+          chat.send("No supervised response yet.", "supervised-last-empty");
+          return true;
+        }
+
+        const requested = summarizeActionNames(supervisedStatus.lastRequestedActions, 6);
+        const accepted = summarizeActionNames(supervisedStatus.lastAcceptedActions, 6);
+        const rejected = summarizeActionNames(supervisedStatus.lastRejectedActions, 3);
+        chat.send(
+          `Supervised last: reply=${summarizeText(
+            supervisedStatus.lastReply,
+            80
+          )}; wouldDo=${summarizeText(supervisedStatus.lastWouldDo, 80)}; confidence=${
+            supervisedStatus.lastConfidence ?? "none"
+          }; logId=${supervisedStatus.lastLogId ?? "none"}; requested=${requested}; accepted=${accepted}; rejected=${rejected}.`,
+          "supervised-last"
+        );
+        return true;
+      }
+
+      case "REPORT_SUPERVISED_TEST": {
+        const supervisedStatus = getSupervisedStatus();
+        if (!supervisedStatus.enabled) {
+          chat.send("Supervised mode is disabled by safety settings.", "supervised-test-disabled");
+          return true;
+        }
+
+        if (!supervisedStatus.configured) {
+          chat.send("Supervised bridge is not configured.", "supervised-test-unconfigured");
+          return true;
+        }
+
+        const result = await sendSupervisedObservation();
+        if (result.code === "sent" || result.code === "sent_no_actions") {
+          const refreshed = getSupervisedStatus();
+          chat.send(
+            `Supervised test complete: ${summarizeText(
+              result.message,
+              90
+            )} confidence=${refreshed.lastConfidence ?? "none"}, accepted=${refreshed.acceptedCount}, rejected=${
+              refreshed.rejectedCount
+            }.`,
+            "supervised-test-success"
+          );
+          return true;
+        }
+
+        chat.send(`Supervised test result: ${summarizeText(result.message, 120)}.`, "supervised-test-result");
+        return true;
+      }
+
+      case "REPORT_SUPERVISED_SUMMARY": {
+        const supervisedStatus = getSupervisedStatus();
+        chat.send(
+          `Supervised summary: enabled=${String(supervisedStatus.enabled)}, configured=${String(
+            supervisedStatus.configured
+          )}, sent=${supervisedStatus.sendCount}, accepted=${supervisedStatus.acceptedCount}, rejected=${
+            supervisedStatus.rejectedCount
+          }, executed=${supervisedStatus.executedCount}, confidence=${
+            supervisedStatus.lastConfidence ?? "none"
+          }, lastError=${summarizeText(supervisedStatus.lastError, 55)}.`,
+          "supervised-summary"
+        );
+        return true;
+      }
+
       case "REPORT_ACTION_QUEUE": {
         const summary = getActionQueueSummary();
         chat.send(
@@ -1729,7 +1835,9 @@ export function createActionController(
             caps.home
           )}, flee=${String(caps.flee)}, wandering=${String(caps.wandering)}, tasks=${String(caps.tasks)}, shadow=${String(
             caps.shadow
-          )}, inventoryRead=${String(caps.inventoryRead)}, equipment=${String(caps.equipment)}, eating=${String(
+          )}, supervised=${String(caps.supervised)}, aiBridge=${String(caps.aiBridge)}, inventoryRead=${String(
+            caps.inventoryRead
+          )}, equipment=${String(caps.equipment)}, eating=${String(
             caps.eating
           )}, mining=${String(caps.mining)}, harvesting=${String(
             caps.harvesting
@@ -2410,10 +2518,12 @@ export function createActionController(
         const wanderingWord = wandering.allowed ? "allowed" : "blocked";
         const tasksWord = tasks.allowed ? "allowed" : "blocked";
         const shadowWord = config.enableAiShadow ? "allowed" : "blocked";
-        const aiWord = config.enableAiBridge ? "allowed" : "blocked";
+        const supervisedWord = config.enableAiSupervised ? "allowed" : "blocked";
+        const aiBridgeWord = config.enableAiBridge ? "allowed" : "blocked";
         const inventoryReadWord = "allowed";
+        const supervisedAllowed = summarizeActionNames(config.supervisedAllowedActions, 10);
 
-        const result = `Safety test: tasks ${tasksWord}, eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, shadow ${shadowWord}, ai ${aiWord}, inventoryRead ${inventoryReadWord}.`;
+        const result = `Safety test: tasks ${tasksWord}, eating ${eatingWord}, equip ${equipWord}, mining ${miningWord}, harvesting ${harvestingWord}, cropHarvesting ${cropHarvestingWord}, wandering ${wanderingWord}, combat ${combatWord}, building ${buildingWord}, crafting ${craftingWord}, containers ${inventoryWord}, shadow ${shadowWord}, supervised ${supervisedWord}, aiBridge ${aiBridgeWord}, inventoryRead ${inventoryReadWord}, supervisedActions ${supervisedAllowed}, forbiddenAiScopes blocked(mining/building/combat/crafting/containers).`;
 
         logger.log("safety", "Safety test results", {
           mining,
@@ -2428,7 +2538,8 @@ export function createActionController(
           wandering,
           tasks,
           shadow: config.enableAiShadow,
-          ai: config.enableAiBridge
+          supervised: config.enableAiSupervised,
+          aiBridge: config.enableAiBridge
         });
         chat.send(result, "safety-test");
         return true;

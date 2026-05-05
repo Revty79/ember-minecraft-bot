@@ -13,7 +13,12 @@ import { createCommandRouter } from "./bot/commands";
 import { createLifecycleController } from "./bot/lifecycle";
 import { createAiBridgeController } from "./bot/aiBridge";
 import { createShadowBridgeController } from "./bot/shadowBridge";
-import type { AiBridgeController, ShadowBridgeController } from "./bot/types";
+import { createSupervisedBridgeController } from "./bot/supervisedBridge";
+import type {
+  AiBridgeController,
+  ShadowBridgeController,
+  SupervisedBridgeController
+} from "./bot/types";
 
 dotenv.config();
 
@@ -27,11 +32,15 @@ if (config.minecraftVersion) {
 }
 logger.log(
   "config",
-  `announce=${String(config.announceOnSpawn)} owner=${config.ownerUsername} aiBridge=${String(config.enableAiBridge)} shadow=${String(config.enableAiShadow)}`
+  `announce=${String(config.announceOnSpawn)} owner=${config.ownerUsername} aiBridge=${String(config.enableAiBridge)} shadow=${String(config.enableAiShadow)} supervised=${String(config.enableAiSupervised)}`
 );
 logger.log(
   "config",
   `shadow intervalMs=${config.shadowObservationIntervalMs} sendWhileMoving=${String(config.shadowSendWhileMoving)} recentEvents=${config.shadowSendRecentEvents} timeoutMs=${config.shadowTimeoutMs} logResponse=${String(config.shadowLogResponse)} chatSummary=${String(config.shadowChatSummary)}`
+);
+logger.log(
+  "config",
+  `supervised intervalMs=${config.supervisedObservationIntervalMs} sendWhileMoving=${String(config.supervisedSendWhileMoving)} timeoutMs=${config.supervisedTimeoutMs} maxActions=${config.supervisedMaxActions} minConfidence=${config.supervisedMinConfidence} ownerRequired=${String(config.supervisedOwnerRequired)} requireSafeState=${String(config.supervisedRequireSafeState)} reportResults=${String(config.supervisedReportResults)}`
 );
 logger.log(
   "config",
@@ -107,6 +116,7 @@ const movement = createMovementController(bot, config, state, safety, chat, perc
 
 let aiBridgeController: AiBridgeController | null = null;
 let shadowBridgeController: ShadowBridgeController | null = null;
+let supervisedBridgeController: SupervisedBridgeController | null = null;
 const actions = createActionController(
   bot,
   config,
@@ -143,10 +153,53 @@ const actions = createActionController(
     Promise.resolve({
       code: "error",
       message: "Shadow bridge is not initialized."
+    }),
+  () =>
+    supervisedBridgeController?.getStatus() ?? {
+      enabled: config.enableAiSupervised,
+      configured: Boolean(config.supervisedBridgeUrl?.trim()) && Boolean(config.supervisedBridgeToken.trim()),
+      url: config.supervisedBridgeUrl ?? null,
+      minConfidence: config.supervisedMinConfidence,
+      maxActions: config.supervisedMaxActions,
+      allowedActions: [],
+      lastSentAt: state.state.supervisedLastSentAt,
+      lastResponseAt: state.state.supervisedLastResponseAt,
+      lastError: state.state.supervisedLastError,
+      lastReply: state.state.supervisedLastReply,
+      lastWouldDo: state.state.supervisedLastWouldDo,
+      lastConfidence: state.state.supervisedLastConfidence,
+      lastLogId: state.state.supervisedLastLogId,
+      sendCount: state.state.supervisedSendCount,
+      errorCount: state.state.supervisedErrorCount,
+      acceptedCount: state.state.supervisedAcceptedCount,
+      rejectedCount: state.state.supervisedRejectedCount,
+      executedCount: state.state.supervisedExecutedCount,
+      lastRequestedActions: [...state.state.supervisedLastRequestedActions],
+      lastAcceptedActions: [...state.state.supervisedLastAcceptedActions],
+      lastRejectedActions: [...state.state.supervisedLastRejectedActions],
+      inFlight: state.state.supervisedInFlight
+    },
+  () =>
+    supervisedBridgeController?.sendObservationToSupervisedBridge({ force: true, reason: "manual-test" }) ??
+    Promise.resolve({
+      code: "error",
+      message: "Supervised bridge is not initialized.",
+      results: []
     })
 );
 aiBridgeController = createAiBridgeController(config, bot, state, perception, actions, logger);
 shadowBridgeController = createShadowBridgeController(config, bot, state, chat, movement, perception, actions, logger);
+supervisedBridgeController = createSupervisedBridgeController(
+  config,
+  bot,
+  state,
+  chat,
+  movement,
+  perception,
+  actions,
+  safety,
+  logger
+);
 
 const commands = createCommandRouter(config, state, chat, actions, safety, logger);
 const lifecycle = createLifecycleController(
@@ -172,6 +225,11 @@ const shadowObservationInterval = setInterval(() => {
   void shadowBridgeController?.sendObservationToShadowBridge({ reason: "interval" });
 }, config.shadowObservationIntervalMs);
 shadowObservationInterval.unref();
+
+const supervisedObservationInterval = setInterval(() => {
+  void supervisedBridgeController?.sendObservationToSupervisedBridge({ reason: "interval" });
+}, config.supervisedObservationIntervalMs);
+supervisedObservationInterval.unref();
 
 let lastDangerStopAt = 0;
 const dangerInterval = setInterval(() => {
@@ -266,6 +324,7 @@ function shutdown(signal: string): void {
   logger.log("connect", `Received ${signal}, shutting down...`);
   clearInterval(observationInterval);
   clearInterval(shadowObservationInterval);
+  clearInterval(supervisedObservationInterval);
   clearInterval(dangerInterval);
   clearInterval(stateLogInterval);
   actions.clearActionQueue("shutdown");

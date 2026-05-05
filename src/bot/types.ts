@@ -15,6 +15,7 @@ export type LogPrefix =
   | "perception"
   | "ai"
   | "shadow"
+  | "supervised"
   | "state"
   | "survival";
 
@@ -160,6 +161,8 @@ export interface CapabilitySummary {
   wandering: boolean;
   tasks: boolean;
   shadow: boolean;
+  supervised: boolean;
+  aiBridge: boolean;
   inventoryRead: boolean;
   equipment: boolean;
   eating: boolean;
@@ -295,6 +298,25 @@ export interface BotState {
   shadowLastLogId: string | null;
   shadowSendCount: number;
   shadowErrorCount: number;
+  supervisedEnabled: boolean;
+  supervisedConfigured: boolean;
+  supervisedBridgeUrl: string | null;
+  supervisedLastSentAt: string | null;
+  supervisedLastResponseAt: string | null;
+  supervisedLastError: string | null;
+  supervisedLastReply: string | null;
+  supervisedLastWouldDo: string | null;
+  supervisedLastConfidence: SupervisedConfidence | null;
+  supervisedLastLogId: string | null;
+  supervisedSendCount: number;
+  supervisedErrorCount: number;
+  supervisedAcceptedCount: number;
+  supervisedRejectedCount: number;
+  supervisedExecutedCount: number;
+  supervisedLastRequestedActions: string[];
+  supervisedLastAcceptedActions: string[];
+  supervisedLastRejectedActions: string[];
+  supervisedInFlight: boolean;
   actionQueueLength: number;
   runningAction: string | null;
   blockedReason: string | null;
@@ -324,6 +346,14 @@ export type BotEventType =
   | "shadow_sent"
   | "shadow_response"
   | "shadow_error"
+  | "supervised_skipped"
+  | "supervised_sent"
+  | "supervised_response"
+  | "supervised_action_accepted"
+  | "supervised_action_rejected"
+  | "supervised_result_sent"
+  | "supervised_result_error"
+  | "supervised_error"
   | "state_update"
   | "error";
 
@@ -362,6 +392,10 @@ export type BotAction =
   | { type: "REPORT_SHADOW_LAST" }
   | { type: "REPORT_SHADOW_TEST" }
   | { type: "REPORT_SHADOW_SUMMARY" }
+  | { type: "REPORT_SUPERVISED_STATUS" }
+  | { type: "REPORT_SUPERVISED_LAST" }
+  | { type: "REPORT_SUPERVISED_TEST" }
+  | { type: "REPORT_SUPERVISED_SUMMARY" }
   | { type: "REPORT_ACTION_QUEUE" }
   | { type: "REPORT_CAPABILITIES" }
   | { type: "REPORT_VITALS" }
@@ -499,6 +533,16 @@ export interface AiBridgeStatus {
 }
 
 export type ShadowConfidence = "low" | "medium" | "high";
+export type SupervisedConfidence = ShadowConfidence;
+
+export type SupervisedActionType =
+  | "STATUS"
+  | "LOOK"
+  | "EAT_IF_HUNGRY"
+  | "GO_HOME"
+  | "STOP"
+  | "FLEE"
+  | "WANDER_YARD";
 
 export interface ShadowObservation {
   timestamp: string;
@@ -602,6 +646,119 @@ export interface ShadowBridgeStatus {
   inFlight: boolean;
 }
 
+export interface SupervisedActionResult {
+  requestedAction: string;
+  normalizedAction: SupervisedActionType | null;
+  accepted: boolean;
+  executed: boolean;
+  success: boolean;
+  reason: string;
+  queuedAction: string | null;
+}
+
+export type SupervisedSendOutcomeCode =
+  | "sent"
+  | "sent_no_actions"
+  | "skipped_disabled"
+  | "skipped_not_ready"
+  | "skipped_moving"
+  | "skipped_in_flight"
+  | "skipped_unconfigured"
+  | "error";
+
+export interface SupervisedSendOutcome {
+  code: SupervisedSendOutcomeCode;
+  message: string;
+  results: SupervisedActionResult[];
+}
+
+export interface SupervisedObservation {
+  timestamp: string;
+  source: "ember-minecraft-bot";
+  mode: "supervised";
+  build: {
+    version: string | null;
+  };
+  botUsername: string;
+  ownerUsername: string;
+  bot: BotSnapshot;
+  task: TaskState;
+  movement: MovementState;
+  vitals: {
+    health: number | null;
+    maxHealth: number;
+    food: number | null;
+    maxFood: number;
+    saturation: number | null;
+    oxygen: number | null;
+    alive: boolean;
+    danger: DangerProximity;
+    position: Vec3Snapshot | null;
+  };
+  hungerFood: {
+    hungerStatus: HungerStatus;
+    foodItems: FoodItemSummary[];
+  };
+  equipment: EquipmentSummary;
+  inventory: InventorySummary;
+  dangerSummary: DangerSummary;
+  nearbyPlayers: PlayerSummary[];
+  nearbyEntities: EntitySummary[];
+  nearbyHostiles: EntitySummary[];
+  perception: PerceptionSnapshot;
+  targetBlock: {
+    name: string | null;
+    category: BlockClass | null;
+    distance: number | null;
+  };
+  yard: {
+    enabled: boolean;
+    centerMode: "home";
+    radius: number;
+    homePosition: Vec3Snapshot | null;
+    distanceFromHome: number | null;
+    insideRadius: boolean | null;
+    active: boolean;
+    steps: number;
+    maxSteps: number;
+    endsAt: string | null;
+    lastStopReason: string | null;
+  };
+  safetyFlags: SafetyFlags;
+  capabilities: CapabilitySummary;
+  actionQueue: ActionQueueSummary;
+  recentEvents: BotEvent[];
+  supervised: {
+    allowedActions: SupervisedActionType[];
+    forbiddenScopes: string[];
+  };
+}
+
+export interface SupervisedBridgeStatus {
+  enabled: boolean;
+  configured: boolean;
+  url: string | null;
+  minConfidence: SupervisedConfidence;
+  maxActions: number;
+  allowedActions: SupervisedActionType[];
+  lastSentAt: string | null;
+  lastResponseAt: string | null;
+  lastError: string | null;
+  lastReply: string | null;
+  lastWouldDo: string | null;
+  lastConfidence: SupervisedConfidence | null;
+  lastLogId: string | null;
+  sendCount: number;
+  errorCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  executedCount: number;
+  lastRequestedActions: string[];
+  lastAcceptedActions: string[];
+  lastRejectedActions: string[];
+  inFlight: boolean;
+}
+
 export interface StateStore {
   state: BotState;
   setConnected: (value: boolean) => void;
@@ -662,6 +819,27 @@ export interface StateStore {
     shadowLastLogId: string | null;
     shadowSendCount: number;
     shadowErrorCount: number;
+  }>) => void;
+  setSupervisedState: (supervised: Partial<{
+    supervisedEnabled: boolean;
+    supervisedConfigured: boolean;
+    supervisedBridgeUrl: string | null;
+    supervisedLastSentAt: string | null;
+    supervisedLastResponseAt: string | null;
+    supervisedLastError: string | null;
+    supervisedLastReply: string | null;
+    supervisedLastWouldDo: string | null;
+    supervisedLastConfidence: SupervisedConfidence | null;
+    supervisedLastLogId: string | null;
+    supervisedSendCount: number;
+    supervisedErrorCount: number;
+    supervisedAcceptedCount: number;
+    supervisedRejectedCount: number;
+    supervisedExecutedCount: number;
+    supervisedLastRequestedActions: string[];
+    supervisedLastAcceptedActions: string[];
+    supervisedLastRejectedActions: string[];
+    supervisedInFlight: boolean;
   }>) => void;
   setActionQueueInfo: (queueLength: number, runningAction: string | null) => void;
   setBlockedReason: (reason: string | null) => void;
@@ -759,6 +937,12 @@ export interface ShadowBridgeController {
   buildObservation: () => ShadowObservation;
 }
 
+export interface SupervisedBridgeController {
+  getStatus: () => SupervisedBridgeStatus;
+  sendObservationToSupervisedBridge: (options?: { force?: boolean; reason?: string }) => Promise<SupervisedSendOutcome>;
+  buildObservation: () => SupervisedObservation;
+}
+
 export interface CommandRouter {
   routeChatMessage: (input: CommandInput) => void;
 }
@@ -776,6 +960,7 @@ export interface BotRuntime {
   actions: ActionController;
   aiBridge: AiBridgeController;
   shadowBridge: ShadowBridgeController;
+  supervisedBridge: SupervisedBridgeController;
   commands: CommandRouter;
   lifecycle: LifecycleController;
 }
